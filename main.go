@@ -99,7 +99,7 @@ func main() {
 func getRoom(logger logr.Logger) string {
 	room, ok := os.LookupEnv(webexRoom)
 	if !ok {
-		logger.Info("Env variable %s supposed to contain webex room not found", room)
+		logger.Info(fmt.Sprintf("Env variable %s supposed to contain webex room not found", room))
 		panic(1)
 	}
 
@@ -142,7 +142,7 @@ func handleOpenIssueRequest(ctx context.Context, webexClient *webexteams.Client,
 
 func sendDefaultResponse(ctx context.Context, webexClient *webexteams.Client,
 	roomID, from, message string, logger logr.Logger) {
-	logger.Info("Sending default response. Failed to understand %q", message)
+	logger.Info(fmt.Sprintf("Sending default response. Failed to understand %q", message))
 
 	textMessage := fmt.Sprintf("Hello <@personEmail:%s|%s> thanks for your question.<br>",
 		from, from)
