@@ -20,8 +20,8 @@ github.com/fortytw2/leaktest v1.3.0 h1:u8491cBMTQ8ft8aeV+adlcytMZylmA5nnwwkRZjI8
 github.com/fortytw2/leaktest v1.3.0/go.mod h1:jDsjWgpAGjm2CA7WthBh/CdZYEPF31XHquHwclZch5g=
 github.com/gianlucam76/cs-e2e-result v0.0.0-20220503205953-ffadf5ee9566 h1:BNpbYubj5UWrPTioGJJ9dzFHqX/6nAFDAOxlIq0DwlA=
 github.com/gianlucam76/cs-e2e-result v0.0.0-20220503205953-ffadf5ee9566/go.mod h1:nRi7c/+YNOg/UVEl/fyFIs6PALpSUav/tcFsqFaOLy0=
-github.com/gianlucam76/jira_utils v0.0.0-20220503183913-9a519d3dd22c h1:t0Cf9LoRMyMxZWVrKnDWgML8DGAf2WtWkV4e1E+zCGU=
-github.com/gianlucam76/jira_utils v0.0.0-20220503183913-9a519d3dd22c/go.mod h1:ghswX0iUSI0uJWhNWK696FLhQ2/vc6AXOSlFCZZKlNM=
+github.com/gianlucam76/jira_utils v0.0.0-20220503231209-9713c44ec8ad h1:AzvnuADyoZCXSScnUhcY8nb3ATEfXYBcP3u/jWlhHaU=
+github.com/gianlucam76/jira_utils v0.0.0-20220503231209-9713c44ec8ad/go.mod h1:ghswX0iUSI0uJWhNWK696FLhQ2/vc6AXOSlFCZZKlNM=
 github.com/go-logr/logr v1.2.0/go.mod h1:jdQByPbusPIv2/zmleS9BjJVeZ6kBagPoEUsqbVz/1A=
 github.com/go-logr/logr v1.2.2/go.mod h1:jdQByPbusPIv2/zmleS9BjJVeZ6kBagPoEUsqbVz/1A=
 github.com/go-logr/logr v1.2.3 h1:2DntVwHkVopvECVRSlL5PSo9eG+cAkDCuckLubN+rq0=
