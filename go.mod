@@ -8,7 +8,6 @@ require (
 	github.com/gianlucam76/jira_utils v0.0.0-20220503231209-9713c44ec8ad
 	github.com/go-logr/logr v1.2.3
 	github.com/jbogarin/go-cisco-webex-teams v0.4.2
-	github.com/n3integration/classifier v0.4.0
 	github.com/spf13/pflag v1.0.5
 	k8s.io/klog/v2 v2.60.1
 )

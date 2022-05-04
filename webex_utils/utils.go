@@ -134,7 +134,7 @@ func SendMessage(c *webexteams.Client, roomID, text string, logger logr.Logger) 
 		return err
 	}
 
-	logger.Info(fmt.Sprintf("response: %s", string(resp.Body())))
+	logger.V(10).Info(fmt.Sprintf("response: %s", string(resp.Body())))
 
 	logger.Info(fmt.Sprintf("Message ID %s", msg.ID))
 
