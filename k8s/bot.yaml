@@ -1,0 +1,102 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: webex-bot
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: webex-bot
+  namespace: webex-bot
+---
+kind: Role
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: webex-bot
+  namespace: webex-bot
+rules:
+  - apiGroups: [""]
+    resources:
+    - 'secrets'
+    verbs:
+    - get
+    - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: webex-bot
+  namespace: webex-bot
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: webex-bot
+subjects:
+- kind: ServiceAccount
+  name: webex-bot
+  namespace: webex-bot
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    bot: webex-bot
+  name: webex-bot-service
+  namespace: webex-bot
+spec:
+  ports:
+  - port: 443
+    targetPort: 9443
+  selector:
+    bot: webex-bot
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    bot: webex-bot
+  name: webex-bot
+  namespace: webex-bot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      bot: webex-bot
+  template:
+    metadata:
+      labels:
+        bot: webex-bot
+    spec:
+      containers:
+      - command:
+        - /webex_bot
+        image: infra/webex-bot-amd64:dev
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: JIRA_BASE_URL
+          value: "https://jira-eng-sjc10.cisco.com/jira"
+        - name: JIRA_USERNAME
+          value: "atom-ci.gen"
+        - name: E2E_WEBEX_ROOM
+          value: "bot testing"
+        - name: WEBEX_AUTH_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: bot-secret
+              key: WEBEX_AUTH_TOKEN
+              optional: false
+        - name: JIRA_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: bot-secret
+              key: JIRA_PASSWORD
+              optional: false
+        name: webex-bot
+        ports:
+        - containerPort: 9443
+          name: bot-server
+          protocol: TCP
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+      terminationGracePeriodSeconds: 10
