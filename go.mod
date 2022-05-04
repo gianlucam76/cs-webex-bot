@@ -1,13 +1,15 @@
-module webex_bot
+module github.com/gianlucam76/webex_bot
 
 go 1.17
 
 require (
 	github.com/andygrunwald/go-jira v1.15.1
-	github.com/gianlucam76/cs-e2e-result v0.0.0-20220503205953-ffadf5ee9566
+	github.com/gianlucam76/cs-e2e-result v0.0.0-20220504171455-34ed2bf56d32
 	github.com/gianlucam76/jira_utils v0.0.0-20220503231209-9713c44ec8ad
 	github.com/go-logr/logr v1.2.3
 	github.com/jbogarin/go-cisco-webex-teams v0.4.2
+	github.com/n3integration/classifier v0.4.0
+	github.com/spf13/pflag v1.0.5
 	k8s.io/klog/v2 v2.60.1
 )
 

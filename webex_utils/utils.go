@@ -148,12 +148,12 @@ func getToken(logger logr.Logger) string {
 	envVar := "WEBEX_AUTH_TOKEN"
 	token, ok := os.LookupEnv(envVar)
 	if !ok {
-		logger.Info("Env variable %s supposed to contain webex auth token not found", envVar)
+		logger.Info(fmt.Sprintf("Env variable %s supposed to contain webex auth token not found", envVar))
 		panic(1)
 	}
 
 	if token == "" {
-		logger.Info("Env variable %s supposed to contain webex auth token is empty", envVar)
+		logger.Info(fmt.Sprintf("Env variable %s supposed to contain webex auth token is empty", envVar))
 		panic(1)
 	}
 

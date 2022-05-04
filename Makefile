@@ -15,6 +15,12 @@ TOOLS_BIN_DIR := $(TOOLS_DIR)/bin
 GOLANGCI_LINT := $(TOOLS_BIN_DIR)/golangci-lint
 GOIMPORTS := $(TOOLS_BIN_DIR)/goimports
 
+TAG ?= dev
+ARCH ?= amd64
+REGISTRY ?= infra
+IMAGE_NAME ?= webex-bot
+export WEBEX_BOT_IMG ?= $(REGISTRY)/$(IMAGE_NAME)
+
 ###############################################################################
 ## Tooling Binaries
 ###############################################################################
@@ -63,3 +69,12 @@ build: fmt ## Build bin/webex_bot
 .PHONY: vet
 vet: ## Run go vet against code
 	go vet ./...
+
+
+###############################################################################
+# Docker
+###############################################################################
+
+.PHONY: docker-build
+docker-build: fmt ## Build the docker image for controller-manager
+	docker build --pull --network=host --build-arg ARCH=$(ARCH) -t $(WEBEX_BOT_IMG)-$(ARCH):$(TAG) -f Dockerfile .
