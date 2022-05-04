@@ -67,6 +67,7 @@ spec:
       labels:
         bot: webex-bot
     spec:
+      hostNetwork: true
       containers:
       - command:
         - /webex_bot
