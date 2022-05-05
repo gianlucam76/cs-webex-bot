@@ -1,6 +1,7 @@
 package webex_utils
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -122,23 +123,48 @@ func GetMessages(c *webexteams.Client, roomID string, logger logr.Logger) (*webe
 	return messages, nil
 }
 
-// SendMessage sends message to roomID
-func SendMessage(c *webexteams.Client, roomID, text string, logger logr.Logger) error {
-	message := &webexteams.MessageCreateRequest{
-		Markdown: text,
-		RoomID:   roomID,
-	}
+func sendMessage(c *webexteams.Client, message *webexteams.MessageCreateRequest,
+	roomID string, logger logr.Logger) error {
 	msg, resp, err := c.Messages.CreateMessage(message)
 	if err != nil {
 		logger.Info(fmt.Sprintf("%v", err))
 		return err
 	}
 
-	logger.V(10).Info(fmt.Sprintf("response: %s", string(resp.Body())))
+	logger.Info(fmt.Sprintf("response: %s", string(resp.Body())))
 
 	logger.Info(fmt.Sprintf("Message ID %s", msg.ID))
 
 	return nil
+}
+
+func SendMessageWithCard(c *webexteams.Client, roomID string, logger logr.Logger) error {
+	jsonMap := make(map[string]interface{})
+	err := json.Unmarshal([]byte(card), &jsonMap)
+	if err != nil {
+		panic(err)
+	}
+
+	message := &webexteams.MessageCreateRequest{
+		RoomID: roomID,
+		Attachments: []webexteams.Attachment{
+			{
+				Content:     jsonMap,
+				ContentType: "application/vnd.microsoft.card.adaptive",
+			},
+		},
+	}
+
+	return sendMessage(c, message, roomID, logger)
+}
+
+// SendMessage sends message to roomID
+func SendMessage(c *webexteams.Client, roomID, text string, logger logr.Logger) error {
+	message := &webexteams.MessageCreateRequest{
+		Markdown: text,
+		RoomID:   roomID,
+	}
+	return sendMessage(c, message, roomID, logger)
 }
 
 // getToken returns the Webex Auth Token
