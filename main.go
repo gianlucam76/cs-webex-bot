@@ -18,13 +18,17 @@ import (
 
 	es_utils "github.com/gianlucam76/cs-e2e-result/es_utils"
 	jira_utils "github.com/gianlucam76/jira_utils/jira"
-	"github.com/gianlucam76/webex_bot/classifier"
 	"github.com/gianlucam76/webex_bot/webex_utils"
 )
 
 const (
 	defaultPollInterval = 20 * time.Second
 	webexRoom           = "E2E_WEBEX_ROOM"
+	issueText           = "issues"
+	vcsText             = "vcs"
+	vcsLink             = "https://cs-aci-jenkins.cisco.com:8443/job/Production/job/Cloudstack/job/Cloudstack-Virtual-Sanity/"
+	ucsText             = "ucs"
+	ucsLink             = "https://cs-aci-jenkins.cisco.com:8443/job/Production/job/Cloudstack/job/Cloudstack-UCS-Sanity/"
 )
 
 var pollInterval time.Duration
@@ -64,9 +68,6 @@ func main() {
 	now := time.Now()
 	maxOldMessageTimestamp := now.Add(-5 * pollInterval)
 
-	c := classifier.GetClassifier()
-	classifier.Train(ctx, c, logger)
-
 	for {
 		messages, err := webex_utils.GetMessages(webexClient, room.ID, logger)
 		if err != nil {
@@ -85,22 +86,18 @@ func main() {
 				logger.Info("No new messages to answer")
 				break
 			} else {
-				var classification string
-				if classification, err = c.ClassifyString(m.Text); err != nil {
-					logger.Info(fmt.Sprintf("Failed to classity %q . Err: %v", m.Text, err))
-					sendDefaultResponse(ctx, webexClient, room.ID, from, m.Text, logger)
-				}
-				switch classification {
-				case classifier.OpenIssues:
+				if strings.Contains(m.Text, issueText) {
 					handleOpenIssueRequest(ctx, webexClient, jiraClient, room.ID, from, logger)
-				case classifier.LastVCSRun:
+				} else if strings.Contains(m.Text, vcsText) {
 					handleVcsResultRequest(ctx, webexClient, room.ID, from, logger)
-				case classifier.LastUCSRun:
+				} else if strings.Contains(m.Text, ucsText) {
 					handleUcsResultRequest(ctx, webexClient, room.ID, from, logger)
-				case classifier.SpecificTest:
-					handleSpecificResultRequest(ctx, webexClient, room.ID, from, m.Text, logger)
-				default:
-					sendDefaultResponse(ctx, webexClient, room.ID, from, m.Text, logger)
+				} else if testName, isMatch, err := doesMatchTest(ctx, webexClient, room.ID, from, m.Text, logger); err == nil {
+					if isMatch {
+						sendMessageWithTestResult(ctx, webexClient, room.ID, from, testName, logger)
+					} else {
+						sendDefaultResponse(ctx, webexClient, room.ID, from, m.Text, logger)
+					}
 				}
 			}
 		}
@@ -112,7 +109,6 @@ func main() {
 
 		time.Sleep(pollInterval)
 	}
-
 }
 
 func getRoom(logger logr.Logger) string {
@@ -141,15 +137,15 @@ func handleOpenIssueRequest(ctx context.Context, webexClient *webexteams.Client,
 		return
 	}
 
-	textMessage := fmt.Sprintf("Hello <@personEmail:%s|%s> thanks for your question.<br>",
+	textMessage := fmt.Sprintf("Hello <@personEmail:%s|%s> thanks for your question.\n\n",
 		from, from)
 
 	if len(issues) == 0 {
 		textMessage += "There are currently no open jira issues"
 	} else {
-		textMessage += "Here is the list of open issues:<br>"
+		textMessage += "Here is the list of open issues:\n\n"
 		for i := range issues {
-			textMessage += fmt.Sprintf("Issue: [%s](https://jira-eng-sjc10.cisco.com/jira/browse/%s)<br>",
+			textMessage += fmt.Sprintf("Issue: [%s](https://jira-eng-sjc10.cisco.com/jira/browse/%s)\n\n",
 				issues[i].Key, issues[i].Key)
 		}
 	}
@@ -163,12 +159,13 @@ func sendDefaultResponse(ctx context.Context, webexClient *webexteams.Client,
 	roomID, from, message string, logger logr.Logger) {
 	logger.Info(fmt.Sprintf("Sending default response. Failed to understand %q", message))
 
-	textMessage := fmt.Sprintf("Hello <@personEmail:%s|%s> thanks for your question.<br>",
+	textMessage := fmt.Sprintf("Hello <@personEmail:%s|%s> thanks for your question.\n\n",
 		from, from)
-	textMessage += "I did not understand your message.<br>"
-	textMessage += fmt.Sprintf("you can type %q if you want to see currently open jira issues <br>", classifier.OpenIssues)
-	textMessage += fmt.Sprintf("you can type %q if you want to see failed tests in last e2e vcs sanity <br>", "vcs")
-	textMessage += fmt.Sprintf("you can type %q if you want to see failed tests in last e2e ucs sanity <br>", "ucs")
+	textMessage += "I did not understand your message.\n\n"
+	textMessage += fmt.Sprintf("1. you can type %q if you want to see currently open jira issues \n\n", issueText)
+	textMessage += fmt.Sprintf("2. you can type %q if you want to see failed tests in last e2e vcs sanity \n\n", vcsText)
+	textMessage += fmt.Sprintf("3. you can type %q if you want to see failed tests in last e2e ucs sanity \n\n", ucsText)
+	textMessage += "4. you can type one of the e2e test names if you want to see last 20 resutls for this test \n\n"
 
 	if err := webex_utils.SendMessage(webexClient, roomID, textMessage, logger); err != nil {
 		logger.Info(fmt.Sprintf("Failed to send message. Err: %v", err))
@@ -199,7 +196,7 @@ func handleVcsResultRequest(ctx context.Context, webexClient *webexteams.Client,
 			return
 		}
 
-		textMessage := fmt.Sprintf("Hello <@personEmail:%s|%s> thanks for your question.<br>",
+		textMessage := fmt.Sprintf("Hello <@personEmail:%s|%s> thanks for your question.\n\n",
 			from, from)
 
 		var rtyp es_utils.Result
@@ -207,10 +204,12 @@ func handleVcsResultRequest(ctx context.Context, webexClient *webexteams.Client,
 		for _, item := range results.Each(reflect.TypeOf(rtyp)) {
 			failedTests = true
 			r := item.(es_utils.Result)
-			textMessage += fmt.Sprintf("Test %s failed in vcs run %d <br>", r.Name, lastRun)
+			textMessage += fmt.Sprintf("Test %s failed in vcs run [%d](%s/%d) \n\n",
+				r.Name, lastRun, vcsLink, lastRun)
 		}
 		if !failedTests {
-			textMessage += fmt.Sprintf("No tests failed in vcs run %d", lastRun)
+			textMessage += fmt.Sprintf("No tests failed in vcs run [%d](%s/%d)",
+				lastRun, vcsLink, lastRun)
 		}
 
 		if err := webex_utils.SendMessage(webexClient, roomID, textMessage, logger); err != nil {
@@ -243,7 +242,7 @@ func handleUcsResultRequest(ctx context.Context, webexClient *webexteams.Client,
 			return
 		}
 
-		textMessage := fmt.Sprintf("Hello <@personEmail:%s|%s> thanks for your question.<br>",
+		textMessage := fmt.Sprintf("Hello <@personEmail:%s|%s> thanks for your question.\n\n",
 			from, from)
 
 		var rtyp es_utils.Result
@@ -251,10 +250,12 @@ func handleUcsResultRequest(ctx context.Context, webexClient *webexteams.Client,
 		for _, item := range results.Each(reflect.TypeOf(rtyp)) {
 			failedTests = true
 			r := item.(es_utils.Result)
-			textMessage += fmt.Sprintf("Test %s failed<br> in ucs run %d", r.Name, lastRun)
+			textMessage += fmt.Sprintf("Test %s failed\n\n in ucs run [%d](%s/%d)",
+				r.Name, lastRun, ucsLink, lastRun)
 		}
 		if !failedTests {
-			textMessage += fmt.Sprintf("No tests failed in ucs run %d", lastRun)
+			textMessage += fmt.Sprintf("No tests failed in ucs run [%d](%s/%d)",
+				lastRun, ucsLink, lastRun)
 		}
 
 		if err := webex_utils.SendMessage(webexClient, roomID, textMessage, logger); err != nil {
@@ -263,49 +264,35 @@ func handleUcsResultRequest(ctx context.Context, webexClient *webexteams.Client,
 	}
 }
 
-func handleSpecificResultRequest(ctx context.Context, webexClient *webexteams.Client,
-	roomID, from, message string, logger logr.Logger) {
-	testName, testDescription, err := buildTests(ctx, logger)
+// doesMatchTest returns true if message contain a test name along with test name
+// retuns false otherwise
+func doesMatchTest(ctx context.Context, webexClient *webexteams.Client,
+	roomID, from, message string, logger logr.Logger) (string, bool, error) {
+	testName, err := buildTests(ctx, logger)
 	if err != nil {
 		logger.Info(fmt.Sprintf("Failed to get tests. Err: %v", err))
-		return
+		return "", false, err
 	}
 
 	for i := range testName {
 		if strings.Contains(message, testName[i]) {
-			logger.Info(fmt.Sprintf("Get last results for test %s", testName[i]))
-			sendMessageWithTestResult(ctx, webexClient, roomID, from, testName[i], logger)
-			return
+			return testName[i], true, nil
 		}
 	}
 
-	// find the test
-	c := classifier.GetClassifier()
-	for k, v := range testDescription {
-		_ = c.TrainString(v, k)
-	}
-
-	var classification string
-	if classification, err = c.ClassifyString(message); err != nil {
-		logger.Info(fmt.Sprintf("Failed to classity %q . Err: %v", message, err))
-		sendDefaultResponse(ctx, webexClient, roomID, from, message, logger)
-	}
-
-	logger.Info(fmt.Sprintf("Get last results for test %s", classification))
-	sendMessageWithTestResult(ctx, webexClient, roomID, from, classification, logger)
+	return "", false, nil
 }
 
 // buildTests creates:
 // - a slice containing all test names
 // - a map containing for each test its descriptions
-func buildTests(ctx context.Context, logger logr.Logger) (testName []string, testDescription map[string]string, err error) {
+func buildTests(ctx context.Context, logger logr.Logger) (testName []string, err error) {
 	testName = make([]string, 0)
-	testDescription = make(map[string]string, 0)
 
 	lastRun, err := getLastRun(ctx, false, logger)
 	if err != nil {
 		logger.Info(fmt.Sprintf("Failed to get last run ID. Err: %v", err))
-		return nil, nil, err
+		return
 	}
 
 	if lastRun != 0 {
@@ -321,14 +308,13 @@ func buildTests(ctx context.Context, logger logr.Logger) (testName []string, tes
 		)
 		if err != nil {
 			logger.Info(fmt.Sprintf("Failed to get failed test in ucs run %d from elastic DB. Err: %v", lastRun, err))
-			return nil, nil, err
+			return nil, err
 		}
 
 		var rtyp es_utils.Result
 		for _, item := range results.Each(reflect.TypeOf(rtyp)) {
 			r := item.(es_utils.Result)
 			testName = append(testName, r.Name)
-			testDescription[r.Name] = r.Description
 		}
 	}
 
@@ -369,19 +355,30 @@ func getLastRun(ctx context.Context, vcs bool, logger logr.Logger) (int64, error
 
 func sendMessageWithTestResult(ctx context.Context, webexClient *webexteams.Client,
 	roomID, from, testName string, logger logr.Logger) {
-	results, err := es_utils.GetResults(ctx, logger, "", testName, false, false, false, false, false, 20)
+	vcsResults, err := es_utils.GetResults(ctx, logger, "", testName, true, false, false, false, false, 20)
+	if err != nil {
+		logger.Info(fmt.Sprintf("Failed to get results for test %q. Error %v", testName, err))
+		return
+	}
+	ucsResults, err := es_utils.GetResults(ctx, logger, "", testName, false, true, false, false, false, 20)
 	if err != nil {
 		logger.Info(fmt.Sprintf("Failed to get results for test %q. Error %v", testName, err))
 		return
 	}
 
-	textMessage := fmt.Sprintf("Hello <@personEmail:%s|%s> thanks for your question.<br>",
+	textMessage := fmt.Sprintf("Hello <@personEmail:%s|%s> thanks for your question.\n\n",
 		from, from)
 
 	var rtyp es_utils.Result
-	for _, item := range results.Each(reflect.TypeOf(rtyp)) {
+	for _, item := range vcsResults.Each(reflect.TypeOf(rtyp)) {
 		r := item.(es_utils.Result)
-		textMessage += fmt.Sprintf("Test %s result: %s in run %d<br", r.Name, r.Result, r.Run)
+		textMessage += fmt.Sprintf("Test %s result: %s in VCS run [%d](%s/%d)\n\n",
+			r.Name, r.Result, r.Run, vcsLink, r.Run)
+	}
+	for _, item := range ucsResults.Each(reflect.TypeOf(rtyp)) {
+		r := item.(es_utils.Result)
+		textMessage += fmt.Sprintf("Test %s result: %s in UCS run [%d](%s/%d)\n\n",
+			r.Name, r.Result, r.Run, ucsLink, r.Run)
 	}
 
 	if err := webex_utils.SendMessage(webexClient, roomID, textMessage, logger); err != nil {
