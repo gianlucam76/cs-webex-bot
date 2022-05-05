@@ -159,15 +159,7 @@ func sendDefaultResponse(ctx context.Context, webexClient *webexteams.Client,
 	roomID, from, message string, logger logr.Logger) {
 	logger.Info(fmt.Sprintf("Sending default response. Failed to understand %q", message))
 
-	textMessage := fmt.Sprintf("Hello <@personEmail:%s|%s> thanks for your question.\n\n",
-		from, from)
-	textMessage += "I did not understand your message.\n\n"
-	textMessage += fmt.Sprintf("1. you can type %q if you want to see currently open jira issues \n\n", issueText)
-	textMessage += fmt.Sprintf("2. you can type %q if you want to see failed tests in last e2e vcs sanity \n\n", vcsText)
-	textMessage += fmt.Sprintf("3. you can type %q if you want to see failed tests in last e2e ucs sanity \n\n", ucsText)
-	textMessage += "4. you can type one of the e2e test names if you want to see last 20 resutls for this test \n\n"
-
-	if err := webex_utils.SendMessage(webexClient, roomID, textMessage, logger); err != nil {
+	if err := webex_utils.SendMessageWithCard(webexClient, roomID, logger); err != nil {
 		logger.Info(fmt.Sprintf("Failed to send message. Err: %v", err))
 	}
 }
