@@ -15,7 +15,6 @@ RUN go mod download
 # Copy the go source
 COPY main.go main.go
 COPY webex_utils/ webex_utils/
-COPY classifier/ classifier/
 
 # Build
 RUN GOOS=linux GOARCH=$ARCH go build --trimpath -a -o webex_bot main.go
