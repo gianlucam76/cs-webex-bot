@@ -1,8 +1,14 @@
 # Build the manager binary
-FROM aci-docker-reg.cisco.com/c3/godev:1.0.0-beta_u39 as builder
-
+FROM golang:1.17 as builder
 
 ARG ARCH
+
+ENV http_proxy http://proxy.esl.cisco.com:8080/
+ENV HTTP_PROXY http://proxy.esl.cisco.com:8080/
+ENV https_proxy=http://proxy.esl.cisco.com:8080/
+ENV HTTPS_PROXY=http://proxy.esl.cisco.com:8080/
+ENV NO_PROXY .cisco.com,.insieme.local,localhost
+ENV no_proxy .cisco.com,.insieme.local,localhost
 
 WORKDIR /workspace
 # Copy the Go Modules manifests
@@ -17,11 +23,9 @@ COPY main.go main.go
 COPY webex_utils/ webex_utils/
 
 # Build
-RUN GOOS=linux GOARCH=$ARCH go build --trimpath -a -o webex_bot main.go
+RUN GOOS=linux GOARCH=$ARCH go build -a -o webex_bot main.go
 
-# Use distroless as minimal base image to package the manager binary
-# Refer to https://github.com/GoogleContainerTools/distroless for more details
-FROM aci-docker-reg.cisco.com/c3/minbase:1.0.0-beta_u41
+FROM aci-docker-reg.cisco.com/demo_images/centos:8  
 RUN useradd  nonroot
 WORKDIR /
 COPY --from=builder /workspace/webex_bot .
