@@ -18,9 +18,26 @@ rules:
   - apiGroups: [""]
     resources:
     - 'secrets'
+    - 'pods'
+    - 'pods/log'
     verbs:
+    - create
     - get
     - list
+    - watch
+  - apiGroups:
+    - extensions
+    - apps
+    resources:
+    - deployments
+    - replicasets
+    verbs:
+    - create
+    - update
+    - delete
+    - get
+    - list
+    - watch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -68,11 +85,13 @@ spec:
         bot: webex-bot
     spec:
       hostNetwork: true
+      nodeSelector:
+        webexbot: "true"
       containers:
       - command:
         - /webex_bot
-        image: infra/webex-bot-amd64:dev
-        imagePullPolicy: IfNotPresent
+        image: aci-docker-reg.cisco.com/cloudstack/infra/webex-bot-amd64:dev
+        imagePullPolicy: Always
         env:
         - name: JIRA_BASE_URL
           value: "https://jira-eng-sjc10.cisco.com/jira"
@@ -80,6 +99,14 @@ spec:
           value: "atom-ci.gen"
         - name: E2E_WEBEX_ROOM
           value: "bot testing"
+        - name: https_proxy
+          value: http://proxy.esl.cisco.com:8080
+        - name: HTTPS_PROXY
+          value: http://proxy.esl.cisco.com:8080
+        - name: no_proxy
+          value: .cisco.com, insieme.local
+        - name: NO_PROXY
+          value: .cisco.com, insieme.local          
         - name: WEBEX_AUTH_TOKEN
           valueFrom:
             secretKeyRef:

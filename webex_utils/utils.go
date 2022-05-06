@@ -17,6 +17,7 @@ func GetClient(logger logr.Logger) *webexteams.Client {
 
 	me, _, err := c.People.GetMe()
 	if err != nil {
+		logger.Info(fmt.Sprintf("Failed to get information about who I am. Err: %v", err))
 		panic(1)
 	}
 
@@ -146,7 +147,8 @@ func SendMessageWithCard(c *webexteams.Client, roomID string, logger logr.Logger
 	}
 
 	message := &webexteams.MessageCreateRequest{
-		RoomID: roomID,
+		RoomID:   roomID,
+		Markdown: "did not understand the message",
 		Attachments: []webexteams.Attachment{
 			{
 				Content:     jsonMap,
