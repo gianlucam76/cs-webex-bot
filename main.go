@@ -137,15 +137,15 @@ func handleOpenIssueRequest(ctx context.Context, webexClient *webexteams.Client,
 		return
 	}
 
-	textMessage := fmt.Sprintf("Hello <@personEmail:%s|%s> thanks for your question.\n\n",
+	textMessage := fmt.Sprintf("Hello 🤚 <@personEmail:%s|%s> thanks for your question.  \n",
 		from, from)
 
 	if len(issues) == 0 {
 		textMessage += "There are currently no open jira issues"
 	} else {
-		textMessage += "Here is the list of open issues:\n\n"
+		textMessage += "Here is the list of open issues:  \n"
 		for i := range issues {
-			textMessage += fmt.Sprintf("Issue: [%s](https://jira-eng-sjc10.cisco.com/jira/browse/%s)\n\n",
+			textMessage += fmt.Sprintf("Issue: [%s](https://jira-eng-sjc10.cisco.com/jira/browse/%s)  \n",
 				issues[i].Key, issues[i].Key)
 		}
 	}
@@ -188,7 +188,7 @@ func handleVcsResultRequest(ctx context.Context, webexClient *webexteams.Client,
 			return
 		}
 
-		textMessage := fmt.Sprintf("Hello <@personEmail:%s|%s> thanks for your question.\n\n",
+		textMessage := fmt.Sprintf("Hello 🤚 <@personEmail:%s|%s> thanks for your question.  \n",
 			from, from)
 
 		var rtyp es_utils.Result
@@ -196,11 +196,11 @@ func handleVcsResultRequest(ctx context.Context, webexClient *webexteams.Client,
 		for _, item := range results.Each(reflect.TypeOf(rtyp)) {
 			failedTests = true
 			r := item.(es_utils.Result)
-			textMessage += fmt.Sprintf("Test %s failed in vcs run [%d](%s/%d) \n\n",
+			textMessage += fmt.Sprintf("Test %s failed in vcs run [%d](%s/%d) ❌  \n",
 				r.Name, lastRun, vcsLink, lastRun)
 		}
 		if !failedTests {
-			textMessage += fmt.Sprintf("No tests failed in vcs run [%d](%s/%d)",
+			textMessage += fmt.Sprintf("No tests failed in vcs run [%d](%s/%d) 🥇   \n",
 				lastRun, vcsLink, lastRun)
 		}
 
@@ -234,7 +234,7 @@ func handleUcsResultRequest(ctx context.Context, webexClient *webexteams.Client,
 			return
 		}
 
-		textMessage := fmt.Sprintf("Hello <@personEmail:%s|%s> thanks for your question.\n\n",
+		textMessage := fmt.Sprintf("Hello 🤚 <@personEmail:%s|%s> thanks for your question.  \n",
 			from, from)
 
 		var rtyp es_utils.Result
@@ -242,11 +242,11 @@ func handleUcsResultRequest(ctx context.Context, webexClient *webexteams.Client,
 		for _, item := range results.Each(reflect.TypeOf(rtyp)) {
 			failedTests = true
 			r := item.(es_utils.Result)
-			textMessage += fmt.Sprintf("Test %s failed\n\n in ucs run [%d](%s/%d)",
+			textMessage += fmt.Sprintf("Test %s failed in ucs run [%d](%s/%d) 💔  \n",
 				r.Name, lastRun, ucsLink, lastRun)
 		}
 		if !failedTests {
-			textMessage += fmt.Sprintf("No tests failed in ucs run [%d](%s/%d)",
+			textMessage += fmt.Sprintf("No tests failed in ucs run [%d](%s/%d) 🥇  \n",
 				lastRun, ucsLink, lastRun)
 		}
 
@@ -293,9 +293,9 @@ func buildTests(ctx context.Context, logger logr.Logger) (testName []string, err
 			"",                         // no specific test
 			false,                      // no vcs. VCS has subsets of tests.
 			true,                       // from ucs. UCS has all tests.
-			true,                       // no passed
-			true,                       // get failed tests
-			true,                       // no skipped
+			false,                      // no filter passed tests
+			false,                      // no filter failed tests
+			false,                      // no filter skipped tests
 			200,
 		)
 		if err != nil {
@@ -358,19 +358,35 @@ func sendMessageWithTestResult(ctx context.Context, webexClient *webexteams.Clie
 		return
 	}
 
-	textMessage := fmt.Sprintf("Hello <@personEmail:%s|%s> thanks for your question.\n\n",
+	textMessage := fmt.Sprintf("Hello 🤚 <@personEmail:%s|%s> thanks for your question.  \n",
 		from, from)
 
 	var rtyp es_utils.Result
 	for _, item := range vcsResults.Each(reflect.TypeOf(rtyp)) {
 		r := item.(es_utils.Result)
-		textMessage += fmt.Sprintf("Test %s result: %s in VCS run [%d](%s/%d)\n\n",
+		textMessage += fmt.Sprintf("Test %s result: %s in VCS run [%d](%s/%d)",
 			r.Name, r.Result, r.Run, vcsLink, r.Run)
+		if r.Result == "passed" {
+			textMessage += "✅"
+		} else if r.Result == "failed" {
+			textMessage += "❌"
+		} else if r.Result == "skipped" {
+			textMessage += "⏸"
+		}
+		textMessage += "  \n"
 	}
 	for _, item := range ucsResults.Each(reflect.TypeOf(rtyp)) {
 		r := item.(es_utils.Result)
-		textMessage += fmt.Sprintf("Test %s result: %s in UCS run [%d](%s/%d)\n\n",
+		textMessage += fmt.Sprintf("Test %s result: %s in UCS run [%d](%s/%d)",
 			r.Name, r.Result, r.Run, ucsLink, r.Run)
+		if r.Result == "passed" {
+			textMessage += "✅"
+		} else if r.Result == "failed" {
+			textMessage += "❌"
+		} else if r.Result == "skipped" {
+			textMessage += "⏸"
+		}
+		textMessage += "  \n"
 	}
 
 	if err := webex_utils.SendMessage(webexClient, roomID, textMessage, logger); err != nil {
