@@ -9,39 +9,73 @@ import (
 	"github.com/go-logr/logr"
 )
 
-// BuildTests creates:
+// BuildUCSTests creates:
 // - a slice containing all test names
 // - a map containing for each test its descriptions
-func BuildTests(ctx context.Context, logger logr.Logger) (testName []string, err error) {
+func BuildUCSTests(ctx context.Context, logger logr.Logger) (testName []string, err error) {
 	testName = make([]string, 0)
 
-	lastRun, err := GetLastRun(ctx, false, logger)
+	results, err := es_utils.GetResults(ctx, logger,
+		"",    // no filter on this run
+		"",    // no specific test
+		false, // no vcs. VCS has subsets of tests.
+		true,  // from ucs. UCS has all tests.
+		false, // no filter passed tests
+		false, // no filter failed tests
+		false, // no filter skipped tests
+		200,
+	)
 	if err != nil {
-		logger.Info(fmt.Sprintf("Failed to get last run ID. Err: %v", err))
-		return
+		logger.Info(fmt.Sprintf("Failed to get failed test in ucs from elastic DB. Err: %v", err))
+		return nil, err
 	}
 
-	if lastRun != 0 {
-		results, err := es_utils.GetResults(ctx, logger,
-			fmt.Sprintf("%d", lastRun), // from this run
-			"",                         // no specific test
-			false,                      // no vcs. VCS has subsets of tests.
-			true,                       // from ucs. UCS has all tests.
-			false,                      // no filter passed tests
-			false,                      // no filter failed tests
-			false,                      // no filter skipped tests
-			200,
-		)
-		if err != nil {
-			logger.Info(fmt.Sprintf("Failed to get failed test in ucs run %d from elastic DB. Err: %v", lastRun, err))
-			return nil, err
-		}
+	testNameMap := make(map[string]bool)
 
-		var rtyp es_utils.Result
-		for _, item := range results.Each(reflect.TypeOf(rtyp)) {
-			r := item.(es_utils.Result)
-			testName = append(testName, r.Name)
-		}
+	var rtyp es_utils.Result
+	for _, item := range results.Each(reflect.TypeOf(rtyp)) {
+		r := item.(es_utils.Result)
+		testNameMap[r.Name] = true
+	}
+
+	for k := range testNameMap {
+		testName = append(testName, k)
+	}
+
+	return
+}
+
+// BuildVCSTests creates:
+// - a slice containing all test names
+// - a map containing for each test its descriptions
+func BuildVCSTests(ctx context.Context, logger logr.Logger) (testName []string, err error) {
+	testName = make([]string, 0)
+
+	results, err := es_utils.GetResults(ctx, logger,
+		"",    // no filter on this run
+		"",    // no specific test
+		true,  // from vcs. VCS has subsets of tests.
+		false, // no ucs. UCS has all tests.
+		false, // no filter passed tests
+		false, // no filter failed tests
+		false, // no filter skipped tests
+		200,
+	)
+	if err != nil {
+		logger.Info(fmt.Sprintf("Failed to get failed test in ucs from elastic DB. Err: %v", err))
+		return nil, err
+	}
+
+	testNameMap := make(map[string]bool)
+
+	var rtyp es_utils.Result
+	for _, item := range results.Each(reflect.TypeOf(rtyp)) {
+		r := item.(es_utils.Result)
+		testNameMap[r.Name] = true
+	}
+
+	for k := range testNameMap {
+		testName = append(testName, k)
 	}
 
 	return

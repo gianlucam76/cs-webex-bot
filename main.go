@@ -62,6 +62,9 @@ func main() {
 		return
 	}
 
+	// Send weekly reports on UCS and VCS failed test stats
+	go analyze.WeeklyStats(ctx, webexClient, room.ID, jiraClient, logger)
+
 	// Check time duration for UCS tests. File bugs when the time relative standard deviation
 	// is too large
 	go analyze.CheckTestDurationOnUCS(ctx, webexClient, room.ID, jiraClient, logger)
@@ -266,7 +269,7 @@ func handleUcsResultRequest(ctx context.Context, webexClient *webexteams.Client,
 // retuns false otherwise
 func doesMatchTest(ctx context.Context, webexClient *webexteams.Client,
 	roomID, from, message string, logger logr.Logger) (string, bool, error) {
-	testName, err := utils.BuildTests(ctx, logger)
+	testName, err := utils.BuildUCSTests(ctx, logger)
 	if err != nil {
 		logger.Info(fmt.Sprintf("Failed to get tests. Err: %v", err))
 		return "", false, err
