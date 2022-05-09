@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/go-logr/logr"
 	webexteams "github.com/jbogarin/go-cisco-webex-teams/sdk"
@@ -160,8 +161,36 @@ func SendMessageWithCard(c *webexteams.Client, roomID string, logger logr.Logger
 	return sendMessage(c, message, roomID, logger)
 }
 
+// SendMessageWithGraph sends message to roomID with graph attached
+func SendMessageWithGraph(c *webexteams.Client, roomID, text, path string,
+	logger logr.Logger) error {
+
+	filename := filepath.Base(path)
+
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	message := &webexteams.MessageCreateRequest{
+		Markdown: text,
+		RoomID:   roomID,
+		Files: []webexteams.File{
+			{
+				Name: filename,
+				//ContentType: writer.FormDataContentType(),
+				Reader: file,
+			},
+		},
+	}
+	return sendMessage(c, message, roomID, logger)
+
+}
+
 // SendMessage sends message to roomID
-func SendMessage(c *webexteams.Client, roomID, text string, logger logr.Logger) error {
+func SendMessage(c *webexteams.Client, roomID, text string,
+	logger logr.Logger) error {
 	message := &webexteams.MessageCreateRequest{
 		Markdown: text,
 		RoomID:   roomID,
