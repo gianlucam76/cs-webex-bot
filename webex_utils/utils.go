@@ -133,7 +133,7 @@ func sendMessage(c *webexteams.Client, message *webexteams.MessageCreateRequest,
 		return err
 	}
 
-	logger.Info(fmt.Sprintf("response: %s", string(resp.Body())))
+	logger.V(10).Info(fmt.Sprintf("response: %s", string(resp.Body())))
 
 	logger.Info(fmt.Sprintf("Message ID %s", msg.ID))
 
@@ -162,30 +162,30 @@ func SendMessageWithCard(c *webexteams.Client, roomID string, logger logr.Logger
 }
 
 // SendMessageWithGraph sends message to roomID with graph attached
-func SendMessageWithGraph(c *webexteams.Client, roomID, text, path string,
+func SendMessageWithGraphs(c *webexteams.Client, roomID, text string, paths []string,
 	logger logr.Logger) error {
-
-	filename := filepath.Base(path)
-
-	file, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
 
 	message := &webexteams.MessageCreateRequest{
 		Markdown: text,
 		RoomID:   roomID,
-		Files: []webexteams.File{
-			{
-				Name: filename,
-				//ContentType: writer.FormDataContentType(),
-				Reader: file,
-			},
-		},
 	}
-	return sendMessage(c, message, roomID, logger)
 
+	for i := range paths {
+		filename := filepath.Base(paths[i])
+		file, err := os.Open(paths[i])
+		if err != nil {
+			logger.Info(fmt.Sprintf("Failed to read file %s", paths[i]))
+		} else {
+			webexFile := webexteams.File{
+				Name:   filename,
+				Reader: file,
+			}
+			message.Files = append(message.Files, webexFile)
+		}
+		defer file.Close()
+	}
+
+	return sendMessage(c, message, roomID, logger)
 }
 
 // SendMessage sends message to roomID

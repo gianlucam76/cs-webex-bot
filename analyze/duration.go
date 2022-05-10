@@ -104,7 +104,7 @@ func evaluateUCSTest(ctx context.Context,
 			textMessage += fmt.Sprintf("Min duration %f min. Max duration %f min", min, max)
 			textMessage += fmt.Sprintf("Mean value: %f. UCS samples: %d  \n", mean, numberOfSuccessfulRuns)
 			fileName := createDurationPlot(&testNames[i], data, runIds, mean, logger)
-			if err := webex_utils.SendMessageWithGraph(webexClient, roomID, textMessage, fileName, logger); err != nil {
+			if err := webex_utils.SendMessageWithGraphs(webexClient, roomID, textMessage, []string{fileName}, logger); err != nil {
 				logger.Info(fmt.Sprintf("Failed to send message. Err: %v", err))
 			}
 			if alreadySent >= maxMessage {
@@ -157,7 +157,7 @@ func createDurationPlot(testName *string, data []float64, runIds []int, mean flo
 	p.X.Label.Text = "Run ID"
 	p.Y.Label.Text = "Time in minute"
 
-	err := plotutil.AddLines(p,
+	err := plotutil.AddLinePoints(p,
 		"Duration", pts)
 
 	meanPlot := plotter.NewFunction(func(x float64) float64 { return mean })
