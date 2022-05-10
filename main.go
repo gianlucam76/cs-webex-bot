@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"image/color"
 	"os"
 	"reflect"
 	"strings"
@@ -11,8 +12,13 @@ import (
 
 	"github.com/andygrunwald/go-jira"
 	"github.com/go-logr/logr"
+	"github.com/gonum/stat"
 	webexteams "github.com/jbogarin/go-cisco-webex-teams/sdk"
 	"github.com/spf13/pflag"
+	"gonum.org/v1/plot"
+	"gonum.org/v1/plot/plotter"
+	"gonum.org/v1/plot/plotutil"
+	"gonum.org/v1/plot/vg"
 	"k8s.io/klog/v2"
 	"k8s.io/klog/v2/klogr"
 
@@ -301,12 +307,14 @@ func sendMessageWithTestResult(ctx context.Context, webexClient *webexteams.Clie
 		from, from)
 
 	var rtyp es_utils.Result
+	vcsData := make([]float64, 0)
 	for _, item := range vcsResults.Each(reflect.TypeOf(rtyp)) {
 		r := item.(es_utils.Result)
 		textMessage += fmt.Sprintf("Test %s result: %s in VCS run [%d](%s/%d)",
 			r.Name, r.Result, r.Run, vcsLink, r.Run)
 		if r.Result == "passed" {
 			textMessage += "✅"
+			vcsData = append(vcsData, rtyp.DurationInMinutes)
 		} else if r.Result == "failed" {
 			textMessage += "❌"
 		} else if r.Result == "skipped" {
@@ -314,12 +322,14 @@ func sendMessageWithTestResult(ctx context.Context, webexClient *webexteams.Clie
 		}
 		textMessage += "  \n"
 	}
+	ucsData := make([]float64, 0)
 	for _, item := range ucsResults.Each(reflect.TypeOf(rtyp)) {
 		r := item.(es_utils.Result)
 		textMessage += fmt.Sprintf("Test %s result: %s in UCS run [%d](%s/%d)",
 			r.Name, r.Result, r.Run, ucsLink, r.Run)
 		if r.Result == "passed" {
 			textMessage += "✅"
+			ucsData = append(ucsData, r.DurationInMinutes)
 		} else if r.Result == "failed" {
 			textMessage += "❌"
 		} else if r.Result == "skipped" {
@@ -328,6 +338,25 @@ func sendMessageWithTestResult(ctx context.Context, webexClient *webexteams.Clie
 		textMessage += "  \n"
 	}
 
+	files := make([]string, 0)
+
+	// Multi file attachment not supported yet. If UCS runs are available, use those.
+	// Otherwise use VCS.
+	if len(ucsData) > 0 {
+		ucsPlot := createDurationPlot("ucs", testName, ucsData, logger)
+		files = append(files, ucsPlot)
+	} else if len(vcsData) > 0 {
+		vcsPlot := createDurationPlot("vcs", testName, vcsData, logger)
+		files = append(files, vcsPlot)
+	}
+
+	// If an attachment is available send message with attachment.
+	if len(files) > 0 {
+		if err := webex_utils.SendMessageWithGraphs(webexClient, roomID, textMessage, files, logger); err != nil {
+			logger.Info(fmt.Sprintf("Failed to send message. Err: %v", err))
+		}
+		return
+	}
 	if err := webex_utils.SendMessage(webexClient, roomID, textMessage, logger); err != nil {
 		logger.Info(fmt.Sprintf("Failed to send message. Err: %v", err))
 	}
@@ -339,4 +368,42 @@ func initFlags(fs *pflag.FlagSet) {
 		defaultPollInterval,
 		"The minimum interval at which watched resources are reconciled (e.g. 10m)",
 	)
+}
+
+func createDurationPlot(environment, testName string, data []float64, logger logr.Logger) string {
+	logger.Info(fmt.Sprintf("Generate duration plot for test %s (env %s)", testName, environment))
+
+	pts := make(plotter.XYs, len(data))
+	for i := range data {
+		pts[i].X = float64(i)
+		pts[i].Y = data[i]
+	}
+
+	p := plot.New()
+
+	p.Title.Text = testName
+	p.X.Label.Text = "Run ID"
+	p.Y.Label.Text = "Time in minute"
+
+	err := plotutil.AddLinePoints(p,
+		fmt.Sprintf("Test duration (env %s)", environment), pts)
+
+	mean, _ := stat.MeanStdDev(data, nil)
+
+	meanPlot := plotter.NewFunction(func(x float64) float64 { return mean })
+	meanPlot.Color = color.RGBA{B: 255, A: 255}
+	p.Add(meanPlot)
+	p.Legend.Add("Mean", meanPlot)
+
+	if err != nil {
+		panic(err)
+	}
+
+	fileName := fmt.Sprintf("/tmp/duration_%s.png", environment)
+	// Save the plot to a PNG file.
+	if err := p.Save(4*vg.Inch, 4*vg.Inch, fileName); err != nil {
+		panic(err)
+	}
+
+	return fileName
 }
