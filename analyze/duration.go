@@ -157,6 +157,11 @@ func createDurationPlot(testName *string, data []float64, runIds []int, mean flo
 	p.X.Label.Text = "Run ID"
 	p.Y.Label.Text = "Time in minute"
 
+	min, max := minMax(data)
+	p.Y.Max = max + 5
+	p.Y.Min = min - 5
+	p.X.Max = float64(tmp[len(tmp)-1] + 5)
+
 	err := plotutil.AddLinePoints(p,
 		"Duration", pts)
 

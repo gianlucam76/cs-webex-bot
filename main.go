@@ -373,10 +373,18 @@ func initFlags(fs *pflag.FlagSet) {
 func createDurationPlot(environment, testName string, data []float64, logger logr.Logger) string {
 	logger.Info(fmt.Sprintf("Generate duration plot for test %s (env %s)", testName, environment))
 
+	min := data[0]
+	max := data[0]
 	pts := make(plotter.XYs, len(data))
 	for i := range data {
 		pts[i].X = float64(i)
 		pts[i].Y = data[i]
+		if max < data[i] {
+			max = data[i]
+		}
+		if min > data[i] {
+			min = data[i]
+		}
 	}
 
 	p := plot.New()
@@ -384,6 +392,10 @@ func createDurationPlot(environment, testName string, data []float64, logger log
 	p.Title.Text = testName
 	p.X.Label.Text = "Run ID"
 	p.Y.Label.Text = "Time in minute"
+
+	p.Y.Max = max + 5
+	p.Y.Min = min - 5
+	p.X.Max = float64(len(data) + 5)
 
 	err := plotutil.AddLinePoints(p,
 		fmt.Sprintf("Test duration (env %s)", environment), pts)
