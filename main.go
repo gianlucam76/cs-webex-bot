@@ -153,7 +153,14 @@ func handleOpenIssueRequest(ctx context.Context, webexClient *webexteams.Client,
 	jiraClient *jira.Client, roomID, from string, logger logr.Logger) {
 	logger.Info("Handling open issue request")
 
-	jql := "Status NOT IN (Resolved,Closed) and reporter = atom-ci.gen"
+	project, err := jira_utils.GetJiraProject(ctx, jiraClient, "", logger)
+	if err != nil || project == nil {
+		logger.Info(fmt.Sprintf("Failed to get jira project. Err: %v", err))
+		return
+	}
+
+	jql := fmt.Sprintf("Status NOT IN (Resolved,Closed) and reporter = atom-ci.gen and project = %s",
+		project.Name)
 	issues, err := jira_utils.GetJiraIssues(ctx, jiraClient, jql, logger)
 	if err != nil {
 		logger.Info(fmt.Sprintf("Failed to get open issues. Err: %v", err))
