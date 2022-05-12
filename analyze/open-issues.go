@@ -20,7 +20,11 @@ func OpenIssues(ctx context.Context,
 	webexClient *webexteams.Client, roomID string,
 	jiraClient *jira.Client,
 	logger logr.Logger) {
-	_ = gocron.Every(2).Day().At("11:30:00").Do(sendOpenIssue,
+	_ = gocron.Every(1).Tuesday().At("11:30:00").Do(sendOpenIssue,
+		ctx, webexClient, roomID, jiraClient, logger)
+	_ = gocron.Every(1).Thursday().At("11:30:00").Do(sendOpenIssue,
+		ctx, webexClient, roomID, jiraClient, logger)
+	_ = gocron.Every(1).Sunday().At("11:30:00").Do(sendOpenIssue,
 		ctx, webexClient, roomID, jiraClient, logger)
 }
 
@@ -28,7 +32,14 @@ func sendOpenIssue(ctx context.Context, webexClient *webexteams.Client, roomID s
 	jiraClient *jira.Client, logger logr.Logger) {
 	logger.Info("Preparing open issue report")
 
-	jql := "Status NOT IN (Resolved,Closed) and reporter = atom-ci.gen"
+	project, err := jira_utils.GetJiraProject(ctx, jiraClient, "", logger)
+	if err != nil || project == nil {
+		logger.Info(fmt.Sprintf("Failed to get jira project. Err: %v", err))
+		return
+	}
+
+	jql := fmt.Sprintf("Status NOT IN (Resolved,Closed) and reporter = atom-ci.gen and project = %s",
+		project.Name)
 	issues, err := jira_utils.GetJiraIssues(ctx, jiraClient, jql, logger)
 	if err != nil {
 		logger.Info(fmt.Sprintf("Failed to get open issues. Err: %v", err))
