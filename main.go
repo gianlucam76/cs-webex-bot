@@ -45,6 +45,11 @@ func main() {
 	ctx := context.Background()
 
 	klog.InitFlags(nil)
+
+	if err := flag.Lookup("v").Value.Set("5"); err != nil {
+		os.Exit(1)
+	}
+
 	logger := klogr.New()
 
 	initFlags(pflag.CommandLine)
@@ -74,6 +79,9 @@ func main() {
 	// Check time duration for UCS tests. File bugs when the time relative standard deviation
 	// is too large
 	go analyze.CheckTestDurationOnUCS(ctx, webexClient, room.ID, jiraClient, logger)
+
+	// Send reports on currently open issues
+	go analyze.OpenIssues(ctx, webexClient, room.ID, jiraClient, logger)
 
 	// Bot will respond to one message at a time.
 	// If this is not set, last message sent to bot will be answered. Otherwise last
