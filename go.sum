@@ -36,8 +36,8 @@ github.com/fortytw2/leaktest v1.3.0/go.mod h1:jDsjWgpAGjm2CA7WthBh/CdZYEPF31XHqu
 github.com/fsnotify/fsnotify v1.4.7/go.mod h1:jwhsz4b93w/PPRr/qN1Yymfu8t87LnFCMoQvtojpjFo=
 github.com/gianlucam76/cs-e2e-result v0.0.0-20220511183034-000b191e6a6f h1:BfH2N6ejsD1c5VzG+8fv2MWpOSYC36RgelfYubZvKwg=
 github.com/gianlucam76/cs-e2e-result v0.0.0-20220511183034-000b191e6a6f/go.mod h1:nRi7c/+YNOg/UVEl/fyFIs6PALpSUav/tcFsqFaOLy0=
-github.com/gianlucam76/jira_utils v0.0.0-20220506232717-a38544f72618 h1:8vV9K/6TFiDl1vZ2on/YQ0TplW/NCfycVhETOp5R4Xs=
-github.com/gianlucam76/jira_utils v0.0.0-20220506232717-a38544f72618/go.mod h1:ghswX0iUSI0uJWhNWK696FLhQ2/vc6AXOSlFCZZKlNM=
+github.com/gianlucam76/jira_utils v0.0.0-20220512020853-3959ce6199aa h1:lmwYeLKv3+bxey/eKi79UrK/I8qjSFqLMsfdL+WORKc=
+github.com/gianlucam76/jira_utils v0.0.0-20220512020853-3959ce6199aa/go.mod h1:ghswX0iUSI0uJWhNWK696FLhQ2/vc6AXOSlFCZZKlNM=
 github.com/go-fonts/dejavu v0.1.0 h1:JSajPXURYqpr+Cu8U9bt8K+XcACIHWqWrvWCKyeFmVQ=
 github.com/go-fonts/dejavu v0.1.0/go.mod h1:4Wt4I4OU2Nq9asgDCteaAaWZOV24E+0/Pwo0gppep4g=
 github.com/go-fonts/latin-modern v0.2.0 h1:5/Tv1Ek/QCr20C6ZOz15vw3g7GELYL98KWr8Hgo+3vk=

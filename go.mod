@@ -5,7 +5,7 @@ go 1.17
 require (
 	github.com/andygrunwald/go-jira v1.15.1
 	github.com/gianlucam76/cs-e2e-result v0.0.0-20220511183034-000b191e6a6f
-	github.com/gianlucam76/jira_utils v0.0.0-20220506232717-a38544f72618
+	github.com/gianlucam76/jira_utils v0.0.0-20220512020853-3959ce6199aa
 	github.com/go-logr/logr v1.2.3
 	github.com/gonum/stat v0.0.0-20181125101827-41a0da705a5b
 	github.com/jbogarin/go-cisco-webex-teams v0.4.3-0.20220225201938-b2d7f7b157c7
