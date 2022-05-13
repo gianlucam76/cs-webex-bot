@@ -12,7 +12,6 @@ import (
 	webexteams "github.com/jbogarin/go-cisco-webex-teams/sdk"
 
 	es_utils "github.com/gianlucam76/cs-e2e-result/es_utils"
-	"github.com/gianlucam76/webex_bot/utils"
 	"github.com/gianlucam76/webex_bot/webex_utils"
 )
 
@@ -31,13 +30,13 @@ func WeeklyStats(ctx context.Context,
 	webexClient *webexteams.Client, roomID string,
 	jiraClient *jira.Client,
 	logger logr.Logger) {
-	_ = gocron.Every(1).Friday().At("09:00:00").Do(sendStats,
+	_ = gocron.Every(1).Friday().At("09:00:00").Do(SendStats,
 		ctx, webexClient, roomID, jiraClient, logger)
 }
 
 // sendStats collects all runs in the last "run".
 // Report tests the top 5 test which failed the most, if any.
-func sendStats(ctx context.Context,
+func SendStats(ctx context.Context,
 	webexClient *webexteams.Client, roomID string,
 	jiraClient *jira.Client,
 	logger logr.Logger) {
@@ -53,63 +52,24 @@ func sendStatsPerEnvironment(ctx context.Context,
 	webexClient *webexteams.Client, roomID string,
 	jiraClient *jira.Client, ucs bool,
 	logger logr.Logger) {
-	var err error
-	var testNames []string
 	var env string
-	if ucs {
-		env = "ucs"
-		testNames, err = utils.BuildUCSTests(ctx, logger)
-	} else {
-		env = "vcs"
-		testNames, err = utils.BuildVCSTests(ctx, logger)
-	}
-	if err != nil {
-		logger.Info(fmt.Sprintf("Failed to get tests. Err: %v", err))
-		return
-	}
 
 	// failedTestMap contains, per test number of times test failed
 	failedTestMap := make(map[string]int)
 	// failedTestMap contains, per test number of times test passed
 	passedTestMap := make(map[string]int)
 
-	foundFailed := false
-
-	for i := range testNames {
-		ucsResults, err := es_utils.GetResults(ctx, logger,
-			"",           // no specific run
-			testNames[i], // for this specific test
-			!ucs,         // vcs
-			ucs,          // ucs
-			false,        // no filter on passed test
-			false,        // no filter on failed test
-			false,        // no filter on skipped test
-			numberOfRuns) // last numberOfRuns runs
-		if err != nil {
-			logger.Info(fmt.Sprintf("Failed to get results for test %q. Error %v", testNames[i], err))
-			return
-		}
-
-		failedTimes := 0
-		passedTimes := 0
-		var rtyp es_utils.Result
-		for _, item := range ucsResults.Each(reflect.TypeOf(rtyp)) {
-			r := item.(es_utils.Result)
-			if r.Result == "failed" {
-				failedTimes++
-				foundFailed = true
-			} else if r.Result == "passed" {
-				passedTimes++
-			}
-		}
-
-		failedTestMap[testNames[i]] = failedTimes
-		passedTestMap[testNames[i]] = passedTimes
+	collectStats(ctx, ucs, failedTestMap, passedTestMap, numberOfRuns, logger)
+	if ucs {
+		env = "ucs"
+	} else {
+		env = "vcs"
 	}
 
 	var textMessage string
-	if foundFailed {
-		textMessage = "Hello 🤚 This is a weekly report for top failed tests in UCS runs.  \n"
+	if len(failedTestMap) != 0 {
+		textMessage = fmt.Sprintf("Hello 🤚 This is a weekly report for top failed tests in the last %d %s runs  \n",
+			numberOfRuns, env)
 		h := getHeap(failedTestMap)
 		for i := 1; i <= 3; i++ {
 			test := heap.Pop(h).(kv)
@@ -117,7 +77,8 @@ func sendStatsPerEnvironment(ctx context.Context,
 				break
 			}
 			passed := passedTestMap[test.Key]
-			textMessage += fmt.Sprintf("test: %s failed %d times.  (passed %d times)", test.Key, test.Value, passed)
+			textMessage += fmt.Sprintf("1. test: %s failed **%d** times.  (passed %d times)  \n",
+				test.Key, test.Value, passed)
 		}
 	} else {
 		textMessage = fmt.Sprintf("Hello 🤚 Amazing work team. No test has failed in the last %d %s runs 🙌👏  \n",
@@ -154,4 +115,62 @@ func (h *KVHeap) Pop() interface{} {
 	x := old[n-1]
 	*h = old[0 : n-1]
 	return x
+}
+
+// collectStats get latest numberOfRuns for either ucs or vcs.
+// For each available runs:
+// - get all tests.
+// - walk all tests and update failedTestMap for each failed test
+// and passedTestMap for each test that passed.
+func collectStats(ctx context.Context, ucs bool,
+	failedTestMap, passedTestMap map[string]int,
+	numberOfRuns int,
+	logger logr.Logger) {
+	env := "vcs"
+	if ucs {
+		env = "ucs"
+	}
+
+	// Get ES client
+	esClient, err := es_utils.GetClient()
+	if err != nil {
+		logger.Info(fmt.Sprintf("Failed to get es client. Err: %v", err))
+		return
+	}
+
+	// Get last numberOfRuns for this env (ucs vs vcs)
+	b, err := es_utils.GetAvailableRuns(ctx, esClient, env, numberOfRuns, logger)
+	if err != nil {
+		logger.Info(fmt.Sprintf("Failed to get available UCS runs. Err: %v", err))
+		return
+	}
+
+	// For each available run, get all results
+	for _, bucket := range b.Buckets {
+		logger.Info(fmt.Sprintf("Run %s", bucket.KeyNumber.String()))
+		results, err := es_utils.GetResults(ctx, logger,
+			bucket.KeyNumber.String(), // filter on run
+			"",                        // no filter on test name
+			!ucs,                      // filter on vcs
+			ucs,                       // filter ucs runs
+			false,                     // no filter on passed tests
+			false,                     // no filter on failed tests
+			false,                     // no filter on skipped tests
+			200)                       // limit on results
+		if err != nil {
+			logger.Info(fmt.Sprintf("Failed to get results for run %s Err: %v",
+				bucket.KeyNumber.String(), err))
+			continue
+		}
+
+		var rtyp es_utils.Result
+		for _, item := range results.Each(reflect.TypeOf(rtyp)) {
+			r := item.(es_utils.Result)
+			if r.Result == "failed" {
+				failedTestMap[r.Name]++
+			} else if r.Result == "passed" {
+				passedTestMap[r.Name]++
+			}
+		}
+	}
 }
