@@ -13,6 +13,7 @@ import (
 	"github.com/andygrunwald/go-jira"
 	"github.com/go-logr/logr"
 	"github.com/gonum/stat"
+	"github.com/jasonlvhit/gocron"
 	webexteams "github.com/jbogarin/go-cisco-webex-teams/sdk"
 	"github.com/spf13/pflag"
 	"gonum.org/v1/plot"
@@ -74,14 +75,16 @@ func main() {
 	}
 
 	// Send weekly reports on UCS and VCS failed test stats
-	go analyze.WeeklyStats(ctx, webexClient, room.ID, jiraClient, logger)
+	analyze.WeeklyStats(ctx, webexClient, room.ID, jiraClient, logger)
 
 	// Check time duration for UCS tests. File bugs when the time relative standard deviation
 	// is too large
-	go analyze.CheckTestDurationOnUCS(ctx, webexClient, room.ID, jiraClient, logger)
+	analyze.CheckTestDurationOnUCS(ctx, webexClient, room.ID, jiraClient, logger)
 
 	// Send reports on currently open issues
-	go analyze.OpenIssues(ctx, webexClient, room.ID, jiraClient, logger)
+	analyze.OpenIssues(ctx, webexClient, room.ID, jiraClient, logger)
+
+	go startCron()
 
 	// Bot will respond to one message at a time.
 	// If this is not set, last message sent to bot will be answered. Otherwise last
@@ -433,4 +436,8 @@ func createDurationPlot(environment, testName string, data []float64, logger log
 	}
 
 	return fileName
+}
+
+func startCron() {
+	<-gocron.Start()
 }
