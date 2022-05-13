@@ -30,7 +30,7 @@ func WeeklyStats(ctx context.Context,
 	webexClient *webexteams.Client, roomID string,
 	jiraClient *jira.Client,
 	logger logr.Logger) {
-	_ = gocron.Every(1).Friday().At("09:00:00").Do(SendStats,
+	_ = gocron.Every(1).Friday().At("10:30:00").Do(SendStats,
 		ctx, webexClient, roomID, jiraClient, logger)
 }
 
