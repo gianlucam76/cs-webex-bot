@@ -184,8 +184,9 @@ func handleOpenIssueRequest(ctx context.Context, webexClient *webexteams.Client,
 	} else {
 		textMessage += "Here is the list of open issues:  \n"
 		for i := range issues {
-			textMessage += fmt.Sprintf("Issue: [%s](https://jira-eng-sjc10.cisco.com/jira/browse/%s)  \n",
-				issues[i].Key, issues[i].Key)
+			assignee := issues[i].Fields.Assignee.Name
+			textMessage += fmt.Sprintf("Issue: [%s](https://jira-eng-sjc10.cisco.com/jira/browse/%s)  Assigned to <@personEmail:%s@cisco.com|%s>  \n",
+				issues[i].Key, issues[i].Key, assignee, assignee)
 		}
 	}
 
