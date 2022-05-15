@@ -4,14 +4,18 @@ import (
 	"context"
 	"fmt"
 	"image/color"
+	"os"
 	"reflect"
 	"sort"
 
 	"github.com/andygrunwald/go-jira"
+	"github.com/go-echarts/go-echarts/v2/charts"
+	"github.com/go-echarts/go-echarts/v2/opts"
 	"github.com/go-logr/logr"
 	"github.com/gonum/stat"
 	"github.com/jasonlvhit/gocron"
 	webexteams "github.com/jbogarin/go-cisco-webex-teams/sdk"
+	"github.com/olivere/elastic/v7"
 	"gonum.org/v1/plot"
 	"gonum.org/v1/plot/plotter"
 	"gonum.org/v1/plot/plotutil"
@@ -32,6 +36,40 @@ const minDurationInMinutes float64 = 10
 // an action is taken
 const rsdThreshold float64 = 10
 
+// CreatePieCharts
+func CreatePieCharts(ctx context.Context,
+	webexClient *webexteams.Client, roomID string,
+	jiraClient *jira.Client,
+	logger logr.Logger) {
+	_ = gocron.Every(1).Friday().At("9:30:00").Do(sendDurationPieChart,
+		ctx, webexClient, roomID, jiraClient, logger)
+}
+
+func sendDurationPieChart(ctx context.Context,
+	webexClient *webexteams.Client, roomID string,
+	jiraClient *jira.Client,
+	logger logr.Logger) {
+	if shouldSendPieChart(ctx, true, logger) {
+		// create pie chart for vcs
+		if fileName, err := CreateDurationPieChart(ctx, true, roomID, logger); err == nil {
+			textMessage := "please open the attached file to see test duration pie chart from last VCS run"
+			if err := webex_utils.SendMessageWithGraphs(webexClient, roomID, textMessage, []string{fileName}, logger); err != nil {
+				logger.Info(fmt.Sprintf("Failed to send message. Err: %v", err))
+			}
+		}
+	}
+
+	if shouldSendPieChart(ctx, false, logger) {
+		// create pie chart for ucs
+		if fileName, err := CreateDurationPieChart(ctx, false, roomID, logger); err == nil {
+			textMessage := "please open the attached file to see test duration pie chart from last UCS run"
+			if err := webex_utils.SendMessageWithGraphs(webexClient, roomID, textMessage, []string{fileName}, logger); err != nil {
+				logger.Info(fmt.Sprintf("Failed to send message. Err: %v", err))
+			}
+		}
+	}
+}
+
 // CheckTestDurationOnUCS for each test in UCS:
 // - consider the last numberOfRuns runs;
 // - if the mean value is higher than minDurationInMinutes and
@@ -41,7 +79,7 @@ func CheckTestDurationOnUCS(ctx context.Context,
 	webexClient *webexteams.Client, roomID string,
 	jiraClient *jira.Client,
 	logger logr.Logger) {
-	_ = gocron.Every(1).Monday().At("09:00:00").Do(evaluateUCSTest,
+	_ = gocron.Every(1).Monday().At("11:30:00").Do(evaluateUCSTest,
 		ctx, webexClient, roomID, jiraClient, logger)
 }
 
@@ -181,4 +219,160 @@ func createDurationPlot(testName *string, data []float64, runIds []int, mean flo
 	}
 
 	return fileName
+}
+
+// getLastRunResults returns last run results
+func getLastRunResults(ctx context.Context, vcs bool,
+	logger logr.Logger) (*elastic.SearchResult, error) {
+	env := "ucs"
+	if vcs {
+		env = "vcs"
+	}
+	lastRun, err := utils.GetLastRun(ctx, vcs, logger)
+	if err != nil {
+		logger.Info(fmt.Sprintf("Failed to get last run ID. Err: %v", err))
+		return nil, err
+	}
+
+	var results *elastic.SearchResult
+	if lastRun != 0 {
+		results, err = es_utils.GetResults(ctx, logger,
+			fmt.Sprintf("%d", lastRun), // from this run
+			"",                         // no specific test
+			vcs,                        // from vcs
+			!vcs,                       // no ucs
+			false,                      // no passed
+			false,                      // get failed tests
+			false,                      // no skipped
+			200,
+		)
+		if err != nil {
+			logger.Info(fmt.Sprintf("Failed to get failed test in vcs %s %d from elastic DB. Err: %v", env, lastRun, err))
+			return nil, err
+		}
+		return results, nil
+	}
+
+	return nil, nil
+}
+
+// CreateDurationPieChart takes into consideration last available run.
+// Generates a pie chart considering test duration time.
+// Only tests that account for at least one percent of the total time
+// will be displayed
+func CreateDurationPieChart(ctx context.Context, vcs bool,
+	roomID string, logger logr.Logger) (string, error) {
+	env := "ucs"
+	if vcs {
+		env = "vcs"
+	}
+	items := make([]opts.PieData, 0)
+
+	results, err := getLastRunResults(ctx, vcs, logger)
+	if err != nil {
+		logger.Info(fmt.Sprintf("Failed to get failed test in %s from elastic DB. Err: %v", env, err))
+		return "", err
+	}
+
+	// TODO: we stopped storing setup_wait_for_e2e result in es db.
+	// This can be removed in few days
+	exclude_test := "setup_wait_for_e2e"
+
+	var totalTime float64 = 0
+	var rtyp es_utils.Result
+	for _, item := range results.Each(reflect.TypeOf(rtyp)) {
+		r := item.(es_utils.Result)
+		if r.Name == exclude_test {
+			continue
+		}
+		totalTime += r.DurationInMinutes
+	}
+
+	// Total time all tests that individually accounted for less than one percent of the total time.
+	var discardedTotalTime float64 = 0
+	for _, item := range results.Each(reflect.TypeOf(rtyp)) {
+		r := item.(es_utils.Result)
+
+		if r.Name == exclude_test {
+			continue
+		}
+
+		if 100*r.DurationInMinutes/totalTime < 1.0 {
+			discardedTotalTime += r.DurationInMinutes
+			continue
+		}
+
+		name := r.Name
+		if r.Serial {
+			name = fmt.Sprintf("%s*", r.Name)
+		}
+		items = append(items, opts.PieData{
+			Name:  name,
+			Value: fmt.Sprintf("%.2f", r.DurationInMinutes),
+		})
+	}
+
+	if discardedTotalTime > 0 {
+		items = append(items, opts.PieData{
+			Name:  "all others",
+			Value: discardedTotalTime,
+		})
+	}
+
+	if len(items) > 0 {
+		pie := charts.NewPie()
+		pie.SetGlobalOptions(
+			charts.WithTitleOpts(
+				opts.Title{
+					Title:    "Test duration (time is in minutes)",
+					Subtitle: "Only tests which account for at least more than one percent of total time are displayed\nTests marked with '*' ran in serial",
+				},
+			),
+		)
+		pie.SetSeriesOptions()
+		pie.AddSeries("Test duration", items).
+			SetSeriesOptions(
+				charts.WithPieChartOpts(
+					opts.PieChart{
+						Radius: 100,
+					},
+				),
+				charts.WithLabelOpts(
+					opts.Label{
+						Show:      true,
+						Formatter: "{b}: {c}",
+					},
+				),
+			)
+		filname := "/tmp/pie_chart_duration.html"
+		f, _ := os.Create(filname)
+		_ = pie.Render(f)
+
+		return filname, nil
+	}
+	logger.Info("no data to generate pie chart")
+	return "", fmt.Errorf("no data to generate pie chart")
+}
+
+// shouldSendPieChart gets latest run and if there are at least more than 20
+// tests in that run return yes.
+// Return false if last run contains less than 20 tests
+func shouldSendPieChart(ctx context.Context, vcs bool,
+	logger logr.Logger) bool {
+	env := "ucs"
+	if vcs {
+		env = "vcs"
+	}
+
+	results, err := getLastRunResults(ctx, vcs, logger)
+	if err != nil {
+		logger.Info(fmt.Sprintf("Failed to get failed test in %s from elastic DB. Err: %v", env, err))
+		return false
+	}
+
+	if results.TotalHits() > 20 {
+		return true
+	}
+
+	return false
 }

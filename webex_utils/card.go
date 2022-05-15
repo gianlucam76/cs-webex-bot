@@ -74,6 +74,13 @@ var card = `{
                             "weight": "Lighter",
                             "color": "Light",
                             "spacing": "Small"
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": "Pie charts:",
+                            "weight": "Lighter",
+                            "color": "Light",
+                            "spacing": "Small"
                         }
                     ]
                 },
@@ -104,6 +111,13 @@ var card = `{
 						{
                             "type": "TextBlock",
                             "text": "test name to list specific test results",
+                            "weight": "Lighter",
+                            "color": "Light",
+                            "spacing": "Small"
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": "\"charts\" to send test duration pie chart",
                             "weight": "Lighter",
                             "color": "Light",
                             "spacing": "Small"
