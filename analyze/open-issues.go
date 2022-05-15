@@ -55,11 +55,11 @@ func sendOpenIssue(ctx context.Context, webexClient *webexteams.Client, roomID s
 
 	textMessage := "Hello cloudstack team here is the list of current open issues:  \n"
 	for i := range issues {
-		lastUpdateTime := time.Time(issues[i].Fields.Updated)
-		diff := time.Since(lastUpdateTime)
+		createdTime := time.Time(issues[i].Fields.Created)
+		diff := time.Since(createdTime)
 		lastUpdate := fmt.Sprintf("%d days", int(diff.Hours()/24))
 		assignee := issues[i].Fields.Assignee.Name
-		textMessage += fmt.Sprintf("[%s](https://jira-eng-sjc10.cisco.com/jira/browse/%s). Last update %s ago. Assignee <@personEmail:%s@cisco.com|%s>  \n",
+		textMessage += fmt.Sprintf("[%s](https://jira-eng-sjc10.cisco.com/jira/browse/%s). Issue opened %s ago. Assignee <@personEmail:%s@cisco.com|%s>  \n",
 			issues[i].Key, issues[i].Key, lastUpdate, assignee, assignee)
 	}
 
