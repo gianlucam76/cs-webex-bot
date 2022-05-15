@@ -180,6 +180,10 @@ func SendMessageWithGraphs(c *webexteams.Client, roomID, text string, paths []st
 				Name:   filename,
 				Reader: file,
 			}
+			ext := filepath.Ext(filename)
+			if ext == ".png" {
+				webexFile.ContentType = "image/png"
+			}
 			message.Files = append(message.Files, webexFile)
 		}
 		defer file.Close()

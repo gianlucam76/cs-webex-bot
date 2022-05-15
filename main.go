@@ -38,6 +38,7 @@ const (
 	vcsLink             = "https://cs-aci-jenkins.cisco.com:8443/job/Production/job/Cloudstack/job/Cloudstack-Virtual-Sanity/"
 	ucsText             = "ucs"
 	ucsLink             = "https://cs-aci-jenkins.cisco.com:8443/job/Production/job/Cloudstack/job/Cloudstack-UCS-Sanity/"
+	pieChartText        = "charts"
 )
 
 var pollInterval time.Duration
@@ -84,6 +85,9 @@ func main() {
 	// Send reports on currently open issues
 	analyze.OpenIssues(ctx, webexClient, room.ID, jiraClient, logger)
 
+	// Generate pie charts for UCS and VCS considering test durations
+	analyze.CreatePieCharts(ctx, webexClient, room.ID, jiraClient, logger)
+
 	go startCron()
 
 	// Bot will respond to one message at a time.
@@ -118,6 +122,8 @@ func main() {
 					handleVcsResultRequest(ctx, webexClient, room.ID, from, logger)
 				} else if strings.Contains(m.Text, ucsText) {
 					handleUcsResultRequest(ctx, webexClient, room.ID, from, logger)
+				} else if strings.Contains(m.Text, pieChartText) {
+					handlePieChartRequest(ctx, webexClient, room.ID, from, logger)
 				} else if testName, isMatch, err := doesMatchTest(ctx, webexClient, room.ID, from, m.Text, logger); err == nil {
 					if isMatch {
 						sendMessageWithTestResult(ctx, webexClient, room.ID, from, testName, logger)
@@ -214,7 +220,7 @@ func handleVcsResultRequest(ctx context.Context, webexClient *webexteams.Client,
 			false,                      // no passed
 			true,                       // get failed tests
 			false,                      // no skipped
-			100,
+			200,
 		)
 		if err != nil {
 			logger.Info(fmt.Sprintf("Failed to get failed test in vcs run %d from elastic DB. Err: %v", lastRun, err))
@@ -260,7 +266,7 @@ func handleUcsResultRequest(ctx context.Context, webexClient *webexteams.Client,
 			false,                      // no passed
 			true,                       // get failed tests
 			false,                      // no skipped
-			100,
+			200,
 		)
 		if err != nil {
 			logger.Info(fmt.Sprintf("Failed to get failed test in ucs run %d from elastic DB. Err: %v", lastRun, err))
@@ -284,6 +290,29 @@ func handleUcsResultRequest(ctx context.Context, webexClient *webexteams.Client,
 		}
 
 		if err := webex_utils.SendMessage(webexClient, roomID, textMessage, logger); err != nil {
+			logger.Info(fmt.Sprintf("Failed to send message. Err: %v", err))
+		}
+	}
+}
+
+func handlePieChartRequest(ctx context.Context, webexClient *webexteams.Client,
+	roomID, from string, logger logr.Logger) {
+	logger.Info("Handling pie chart request")
+
+	if fileName, err := analyze.CreateDurationPieChart(ctx, true, roomID, logger); err == nil {
+		textMessage := fmt.Sprintf("Hello 🤚 <@personEmail:%s|%s> thanks for your question.  \n",
+			from, from)
+		textMessage += "please open the attached file to see test duration pie chart from last VCS run  \n"
+		if err := webex_utils.SendMessageWithGraphs(webexClient, roomID, textMessage, []string{fileName}, logger); err != nil {
+			logger.Info(fmt.Sprintf("Failed to send message. Err: %v", err))
+		}
+	}
+	// create pie chart for ucs
+	if fileName, err := analyze.CreateDurationPieChart(ctx, false, roomID, logger); err == nil {
+		textMessage := fmt.Sprintf("Hello 🤚 <@personEmail:%s|%s> thanks for your question.  \n",
+			from, from)
+		textMessage += "please open the attached file to see test duration pie chart from last UCS run  \n"
+		if err := webex_utils.SendMessageWithGraphs(webexClient, roomID, textMessage, []string{fileName}, logger); err != nil {
 			logger.Info(fmt.Sprintf("Failed to send message. Err: %v", err))
 		}
 	}
@@ -324,37 +353,40 @@ func sendMessageWithTestResult(ctx context.Context, webexClient *webexteams.Clie
 	textMessage := fmt.Sprintf("Hello 🤚 <@personEmail:%s|%s> thanks for your question.  \n",
 		from, from)
 
+	passedRuns := make([]int, 0)
+	failedRuns := make([]int, 0)
+	skippedRuns := make([]int, 0)
 	var rtyp es_utils.Result
 	vcsData := make([]float64, 0)
 	for _, item := range vcsResults.Each(reflect.TypeOf(rtyp)) {
 		r := item.(es_utils.Result)
-		textMessage += fmt.Sprintf("Test %s result: %s in VCS run [%d](%s/%d)",
-			r.Name, r.Result, r.Run, vcsLink, r.Run)
 		if r.Result == "passed" {
-			textMessage += "✅"
-			vcsData = append(vcsData, rtyp.DurationInMinutes)
+			passedRuns = append(passedRuns, r.Run)
+			vcsData = append(vcsData, r.DurationInMinutes)
 		} else if r.Result == "failed" {
-			textMessage += "❌"
+			failedRuns = append(failedRuns, r.Run)
 		} else if r.Result == "skipped" {
-			textMessage += "⏸"
+			skippedRuns = append(skippedRuns, r.Run)
 		}
-		textMessage += "  \n"
 	}
+	textMessage += appendResultsToMessage(passedRuns, failedRuns, skippedRuns, testName, "vcs")
+
+	passedRuns = make([]int, 0)
+	failedRuns = make([]int, 0)
+	skippedRuns = make([]int, 0)
 	ucsData := make([]float64, 0)
 	for _, item := range ucsResults.Each(reflect.TypeOf(rtyp)) {
 		r := item.(es_utils.Result)
-		textMessage += fmt.Sprintf("Test %s result: %s in UCS run [%d](%s/%d)",
-			r.Name, r.Result, r.Run, ucsLink, r.Run)
 		if r.Result == "passed" {
-			textMessage += "✅"
+			passedRuns = append(passedRuns, r.Run)
 			ucsData = append(ucsData, r.DurationInMinutes)
 		} else if r.Result == "failed" {
-			textMessage += "❌"
+			failedRuns = append(failedRuns, r.Run)
 		} else if r.Result == "skipped" {
-			textMessage += "⏸"
+			skippedRuns = append(skippedRuns, r.Run)
 		}
-		textMessage += "  \n"
 	}
+	textMessage += appendResultsToMessage(passedRuns, failedRuns, skippedRuns, testName, "ucs")
 
 	files := make([]string, 0)
 
@@ -378,6 +410,32 @@ func sendMessageWithTestResult(ctx context.Context, webexClient *webexteams.Clie
 	if err := webex_utils.SendMessage(webexClient, roomID, textMessage, logger); err != nil {
 		logger.Info(fmt.Sprintf("Failed to send message. Err: %v", err))
 	}
+}
+
+func appendResultsToMessage(passedRuns, failedRuns, skippedRuns []int, testName, env string) string {
+	textMessage := ""
+	if len(passedRuns) > 0 {
+		textMessage += fmt.Sprintf("Test **%s** passed in **%s** runs: ", testName, env)
+		for i := range passedRuns {
+			textMessage += fmt.Sprintf("[%d](%s/%d) ", passedRuns[i], vcsLink, passedRuns[i])
+		}
+		textMessage += "✅  \n"
+	}
+	if len(skippedRuns) > 0 {
+		textMessage += fmt.Sprintf("Test **%s** was skipped in **%s** runs: ", testName, env)
+		for i := range skippedRuns {
+			textMessage += fmt.Sprintf("[%d](%s/%d) ", skippedRuns[i], vcsLink, skippedRuns[i])
+		}
+		textMessage += "⏸  \n"
+	}
+	if len(failedRuns) > 0 {
+		textMessage += fmt.Sprintf("Test **%s** failed in **%s** runs: ", testName, env)
+		for i := range failedRuns {
+			textMessage += fmt.Sprintf("[%d](%s/%d) ", failedRuns[i], vcsLink, failedRuns[i])
+		}
+		textMessage += "❌  \n"
+	}
+	return textMessage
 }
 
 func initFlags(fs *pflag.FlagSet) {
@@ -408,7 +466,7 @@ func createDurationPlot(environment, testName string, data []float64, logger log
 	p := plot.New()
 
 	p.Title.Text = testName
-	p.X.Label.Text = "Run ID"
+	p.X.Label.Text = "Runs (index is not used)"
 	p.Y.Label.Text = "Time in minute"
 
 	p.Y.Max = max + 5
