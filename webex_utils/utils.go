@@ -126,14 +126,14 @@ func GetMessages(c *webexteams.Client, roomID string, logger logr.Logger) (*webe
 }
 
 func sendMessage(c *webexteams.Client, message *webexteams.MessageCreateRequest,
-	roomID string, logger logr.Logger) error {
+	logger logr.Logger) error {
 	msg, resp, err := c.Messages.CreateMessage(message)
 	if err != nil {
 		logger.Info(fmt.Sprintf("%v", err))
 		return err
 	}
 
-	logger.V(10).Info(fmt.Sprintf("response: %s", string(resp.Body())))
+	logger.V(1).Info(fmt.Sprintf("response: %s", string(resp.Body())))
 
 	logger.Info(fmt.Sprintf("Message ID %s", msg.ID))
 
@@ -158,7 +158,7 @@ func SendMessageWithCard(c *webexteams.Client, roomID string, logger logr.Logger
 		},
 	}
 
-	return sendMessage(c, message, roomID, logger)
+	return sendMessage(c, message, logger)
 }
 
 // SendMessageWithGraph sends message to roomID with graph attached
@@ -183,23 +183,25 @@ func SendMessageWithGraphs(c *webexteams.Client, roomID, text string, paths []st
 			ext := filepath.Ext(filename)
 			if ext == ".png" {
 				webexFile.ContentType = "image/png"
+			} else if ext == ".pdf" {
+				webexFile.ContentType = "application/pdf"
 			}
 			message.Files = append(message.Files, webexFile)
 		}
 		defer file.Close()
 	}
 
-	return sendMessage(c, message, roomID, logger)
+	return sendMessage(c, message, logger)
 }
 
 // SendMessage sends message to roomID
 func SendMessage(c *webexteams.Client, roomID, text string,
 	logger logr.Logger) error {
 	message := &webexteams.MessageCreateRequest{
-		Markdown: text,
 		RoomID:   roomID,
+		Markdown: text,
 	}
-	return sendMessage(c, message, roomID, logger)
+	return sendMessage(c, message, logger)
 }
 
 // getToken returns the Webex Auth Token

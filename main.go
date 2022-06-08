@@ -5,8 +5,10 @@ import (
 	"flag"
 	"fmt"
 	"image/color"
+	"image/png"
 	"os"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -15,6 +17,10 @@ import (
 	"github.com/gonum/stat"
 	"github.com/jasonlvhit/gocron"
 	webexteams "github.com/jbogarin/go-cisco-webex-teams/sdk"
+	"github.com/johnfercher/maroto/pkg/consts"
+	"github.com/johnfercher/maroto/pkg/pdf"
+	"github.com/johnfercher/maroto/pkg/props"
+	gim "github.com/ozankasikci/go-image-merge"
 	"github.com/spf13/pflag"
 	"gonum.org/v1/plot"
 	"gonum.org/v1/plot/plotter"
@@ -39,6 +45,8 @@ const (
 	ucsText             = "ucs"
 	ucsLink             = "https://cs-aci-jenkins.cisco.com:8443/job/Production/job/Cloudstack/job/Cloudstack-UCS-Sanity/"
 	pieChartText        = "charts"
+	reportText          = "reports"
+	summaryText         = "summary"
 )
 
 var pollInterval time.Duration
@@ -76,17 +84,21 @@ func main() {
 	}
 
 	// Send weekly reports on UCS and VCS failed test stats
-	analyze.WeeklyStats(ctx, webexClient, room.ID, jiraClient, logger)
+	analyze.WeeklyStats(ctx, webexClient, room.ID, logger)
 
-	// Check time duration for UCS tests. File bugs when the time relative standard deviation
+	// Check time duration for UCS tests. Send webex message when the time relative standard deviation
 	// is too large
-	analyze.CheckTestDurationOnUCS(ctx, webexClient, room.ID, jiraClient, logger)
+	analyze.CheckTestDurationOnUCS(ctx, webexClient, room.ID, logger)
+
+	// Analyze reports for UCS tests. Send webex message when the time relative standard deviation
+	// is too large
+	analyze.CheckReportDurationOnUCS(ctx, webexClient, room.ID, logger)
 
 	// Send reports on currently open issues
 	analyze.OpenIssues(ctx, webexClient, room.ID, jiraClient, logger)
 
 	// Generate pie charts for UCS and VCS considering test durations
-	analyze.CreatePieCharts(ctx, webexClient, room.ID, jiraClient, logger)
+	analyze.CreatePieCharts(ctx, webexClient, room.ID, logger)
 
 	go startCron()
 
@@ -124,6 +136,10 @@ func main() {
 					handleUcsResultRequest(ctx, webexClient, room.ID, from, logger)
 				} else if strings.Contains(m.Text, pieChartText) {
 					handlePieChartRequest(ctx, webexClient, room.ID, from, logger)
+				} else if strings.Contains(m.Text, reportText) {
+					handleReportRequest(ctx, webexClient, room.ID, from, logger)
+				} else if strings.Contains(m.Text, summaryText) {
+					handleSummaryRequest(ctx, webexClient, room.ID, from, logger)
 				} else if testName, isMatch, err := doesMatchTest(ctx, webexClient, room.ID, from, m.Text, logger); err == nil {
 					if isMatch {
 						sendMessageWithTestResult(ctx, webexClient, room.ID, from, testName, logger)
@@ -322,6 +338,201 @@ func handlePieChartRequest(ctx context.Context, webexClient *webexteams.Client,
 	}
 }
 
+func handleReportRequest(ctx context.Context, webexClient *webexteams.Client,
+	roomID, from string, logger logr.Logger) {
+	logger.Info("Handling report request")
+	files, err := getReportFiles(ctx, logger)
+	if err != nil {
+		return
+	}
+
+	sort.Strings(files)
+
+	grids := make([]*gim.Grid, 0)
+	for i := range files {
+		tmpGrid := gim.Grid{ImageFilePath: files[i]}
+		grids = append(grids, &tmpGrid)
+	}
+	rgba, err := gim.New(grids, 3, 3).Merge()
+	if err != nil {
+		logger.Info(fmt.Sprintf("Failed to create grid. Error %v", err))
+		return
+	}
+
+	gridFileName := "/tmp/report_grid.png"
+	file, err := os.Create(gridFileName)
+	if err != nil {
+		logger.Info(fmt.Sprintf("Failed to create grid file. Error %v", err))
+		return
+	}
+
+	if err = png.Encode(file, rgba); err != nil {
+		logger.Info(fmt.Sprintf("Failed to encode grid file. Error %v", err))
+		return
+	}
+
+	textMessage := fmt.Sprintf("Hello 🤚 <@personEmail:%s|%s> thanks for your question.  \n",
+		from, from)
+	textMessage += "Please find attached the cloudstack e2e report duration plots"
+
+	if err := webex_utils.SendMessageWithGraphs(webexClient, roomID, textMessage,
+		[]string{gridFileName}, logger); err != nil {
+		logger.Info(fmt.Sprintf("Failed to send message. Err: %v", err))
+	}
+}
+
+func handleSummaryRequest(ctx context.Context, webexClient *webexteams.Client,
+	roomID, from string, logger logr.Logger) {
+	logger.Info("Handling summary request")
+
+	m := pdf.NewMaroto(consts.Portrait, consts.A4)
+	var margin float64 = 10
+	m.SetPageMargins(margin, margin, margin)
+
+	vcsRun, err := utils.GetLastRun(ctx, true, logger)
+	if err != nil {
+		return
+	}
+
+	ucsRun, err := utils.GetLastRun(ctx, false, logger)
+	if err != nil {
+		return
+	}
+
+	m.RegisterHeader(func() {
+		m.Row(10, func() {
+			m.Col(20, func() {
+				m.Text("Prepared for you by cloudstack e2e assistant.", props.Text{
+					Top:   0,
+					Style: consts.Bold,
+					Align: consts.Center,
+				})
+				m.Text(fmt.Sprintf("Last UCS run: %d. Last VCS run: %d", ucsRun, vcsRun),
+					props.Text{
+						Top:   6,
+						Style: consts.Bold,
+						Align: consts.Center,
+					})
+			})
+		})
+	})
+
+	m.RegisterFooter(func() {
+		m.Row(10, func() {
+			m.Col(12, func() {
+				m.Text("For any feedback, please reach out to mgianluc@cisco.com", props.Text{
+					Top:   13,
+					Style: consts.BoldItalic,
+					Size:  8,
+					Align: consts.Center,
+				})
+			})
+		})
+	})
+
+	_, height := m.GetPageSize()
+	var currentHeight float64 = height
+
+	// Get list of UCS tests. VCS tests are a subsets of UCS.
+	testNames, err := utils.BuildUCSTests(ctx, logger)
+	if err != nil {
+		logger.Info(fmt.Sprintf("Failed to get tests. Err: %v", err))
+		return
+	}
+
+	// For each test, get duration plot in both UCS and VCS (if not skipped)
+	// Add those to document
+	for i := range testNames {
+		tmpTestFiles, _, err := getTestFiles(ctx, testNames[i], logger)
+		if err != nil {
+			continue
+		}
+
+		var testFile string
+
+		// both VCS and UCS data available, create a grid
+		if len(tmpTestFiles) == 2 {
+			grids := make([]*gim.Grid, 0)
+			for i := range tmpTestFiles {
+				tmpGrid := gim.Grid{ImageFilePath: tmpTestFiles[i]}
+				grids = append(grids, &tmpGrid)
+			}
+			rgba, err := gim.New(grids, 2, 1).Merge()
+			if err != nil {
+				logger.Info(fmt.Sprintf("Failed to create grid. Error %v", err))
+				return
+			}
+			gridFileName := fmt.Sprintf("/tmp/result_grid_%s.png", testNames[i])
+			file, err := os.Create(gridFileName)
+			if err != nil {
+				logger.Info(fmt.Sprintf("Failed to create grid file. Error %v", err))
+				return
+			}
+
+			if err = png.Encode(file, rgba); err != nil {
+				logger.Info(fmt.Sprintf("Failed to encode grid file. Error %v", err))
+				return
+			}
+
+			testFile = gridFileName
+		} else if len(tmpTestFiles) == 1 {
+			testFile = tmpTestFiles[0]
+		}
+
+		if testFile != "" {
+			m.Row(currentHeight+margin, func() {
+				m.Col(0, func() {
+					err = m.FileImage(testFile, props.Rect{
+						Top:     margin,
+						Left:    margin,
+						Percent: 75,
+					})
+					if err != nil {
+						logger.Info(fmt.Sprintf("Failed to add image %v", err))
+					}
+				})
+			})
+			currentHeight += height
+		}
+	}
+
+	// Get all report plots and add to summary document
+	files, err := getReportFiles(ctx, logger)
+	if err != nil {
+		return
+	}
+	for i := range files {
+		m.Row(currentHeight, func() {
+			m.Col(0, func() {
+				err = m.FileImage(files[i], props.Rect{
+					Top:     margin,
+					Left:    margin,
+					Percent: 75,
+				})
+				if err != nil {
+					logger.Info(fmt.Sprintf("Failed to add image %v", err))
+				}
+			})
+		})
+		currentHeight += height
+	}
+
+	summaryFile := "/tmp/summary.pdf"
+	err = m.OutputFileAndClose(summaryFile)
+	if err != nil {
+		os.Exit(1)
+	}
+
+	textMessage := fmt.Sprintf("Hello 🤚 <@personEmail:%s|%s> thanks for your question.  \n",
+		from, from)
+	textMessage += "Please find attached a summary document."
+
+	if err := webex_utils.SendMessageWithGraphs(webexClient, roomID, textMessage,
+		[]string{summaryFile}, logger); err != nil {
+		logger.Info(fmt.Sprintf("Failed to send message. Err: %v", err))
+	}
+}
+
 // doesMatchTest returns true if message contain a test name along with test name
 // retuns false otherwise
 func doesMatchTest(ctx context.Context, webexClient *webexteams.Client,
@@ -343,70 +554,40 @@ func doesMatchTest(ctx context.Context, webexClient *webexteams.Client,
 
 func sendMessageWithTestResult(ctx context.Context, webexClient *webexteams.Client,
 	roomID, from, testName string, logger logr.Logger) {
-	vcsResults, err := es_utils.GetResults(ctx, logger, "", testName, true, false, false, false, false, 20)
-	if err != nil {
-		logger.Info(fmt.Sprintf("Failed to get results for test %q. Error %v", testName, err))
-		return
-	}
-	ucsResults, err := es_utils.GetResults(ctx, logger, "", testName, false, true, false, false, false, 20)
-	if err != nil {
-		logger.Info(fmt.Sprintf("Failed to get results for test %q. Error %v", testName, err))
-		return
-	}
-
 	textMessage := fmt.Sprintf("Hello 🤚 <@personEmail:%s|%s> thanks for your question.  \n",
 		from, from)
 
-	passedRuns := make([]int, 0)
-	failedRuns := make([]int, 0)
-	skippedRuns := make([]int, 0)
-	var rtyp es_utils.Result
-	vcsData := make([]float64, 0)
-	for _, item := range vcsResults.Each(reflect.TypeOf(rtyp)) {
-		r := item.(es_utils.Result)
-		if r.Result == "passed" {
-			passedRuns = append(passedRuns, r.Run)
-			vcsData = append(vcsData, r.DurationInMinutes)
-		} else if r.Result == "failed" {
-			failedRuns = append(failedRuns, r.Run)
-		} else if r.Result == "skipped" {
-			skippedRuns = append(skippedRuns, r.Run)
-		}
-	}
-	textMessage += appendResultsToMessage(passedRuns, failedRuns, skippedRuns, testName, "vcs")
-
-	passedRuns = make([]int, 0)
-	failedRuns = make([]int, 0)
-	skippedRuns = make([]int, 0)
-	ucsData := make([]float64, 0)
-	for _, item := range ucsResults.Each(reflect.TypeOf(rtyp)) {
-		r := item.(es_utils.Result)
-		if r.Result == "passed" {
-			passedRuns = append(passedRuns, r.Run)
-			ucsData = append(ucsData, r.DurationInMinutes)
-		} else if r.Result == "failed" {
-			failedRuns = append(failedRuns, r.Run)
-		} else if r.Result == "skipped" {
-			skippedRuns = append(skippedRuns, r.Run)
-		}
-	}
-	textMessage += appendResultsToMessage(passedRuns, failedRuns, skippedRuns, testName, "ucs")
-
-	files := make([]string, 0)
-
-	// Multi file attachment not supported yet. If UCS runs are available, use those.
-	// Otherwise use VCS.
-	if len(ucsData) > 0 {
-		ucsPlot := createDurationPlot("ucs", testName, ucsData, logger)
-		files = append(files, ucsPlot)
-	} else if len(vcsData) > 0 {
-		vcsPlot := createDurationPlot("vcs", testName, vcsData, logger)
-		files = append(files, vcsPlot)
+	files, tmpMessage, err := getTestFiles(ctx, testName, logger)
+	if err != nil {
+		return
 	}
 
-	// If an attachment is available send message with attachment.
+	textMessage += tmpMessage
+
 	if len(files) > 0 {
-		if err := webex_utils.SendMessageWithGraphs(webexClient, roomID, textMessage, files, logger); err != nil {
+		grids := make([]*gim.Grid, 0)
+		for i := range files {
+			tmpGrid := gim.Grid{ImageFilePath: files[i]}
+			grids = append(grids, &tmpGrid)
+		}
+		rgba, err := gim.New(grids, 2, 1).Merge()
+		if err != nil {
+			logger.Info(fmt.Sprintf("Failed to create grid. Error %v", err))
+			return
+		}
+		gridFileName := "/tmp/result_grid.png"
+		file, err := os.Create(gridFileName)
+		if err != nil {
+			logger.Info(fmt.Sprintf("Failed to create grid file. Error %v", err))
+			return
+		}
+
+		if err = png.Encode(file, rgba); err != nil {
+			logger.Info(fmt.Sprintf("Failed to encode grid file. Error %v", err))
+			return
+		}
+
+		if err := webex_utils.SendMessageWithGraphs(webexClient, roomID, textMessage, []string{gridFileName}, logger); err != nil {
 			logger.Info(fmt.Sprintf("Failed to send message. Err: %v", err))
 		}
 		return
@@ -451,7 +632,7 @@ func initFlags(fs *pflag.FlagSet) {
 }
 
 func createDurationPlot(environment, testName string, data []float64, logger logr.Logger) string {
-	logger.Info(fmt.Sprintf("Generate duration plot for test %s (env %s)", testName, environment))
+	logger.Info(fmt.Sprintf("Generate duration plot for %s (env %s)", testName, environment))
 
 	min := data[0]
 	max := data[0]
@@ -491,7 +672,7 @@ func createDurationPlot(environment, testName string, data []float64, logger log
 		panic(err)
 	}
 
-	fileName := fmt.Sprintf("/tmp/duration_%s.png", environment)
+	fileName := fmt.Sprintf("/tmp/duration_%s_%s.png", environment, testName)
 	// Save the plot to a PNG file.
 	if err := p.Save(4*vg.Inch, 4*vg.Inch, fileName); err != nil {
 		panic(err)
@@ -502,4 +683,124 @@ func createDurationPlot(environment, testName string, data []float64, logger log
 
 func startCron() {
 	<-gocron.Start()
+}
+
+func getReportFiles(ctx context.Context, logger logr.Logger) ([]string, error) {
+	files := make([]string, 0)
+
+	reportTypes, err := utils.BuildUCSReports(ctx, logger)
+	if err != nil {
+		logger.Info(fmt.Sprintf("Failed to get reports. Err: %v", err))
+		return nil, err
+	}
+
+	for i := range reportTypes {
+		var reportType, reportSubType string
+		info := strings.Split(reportTypes[i], utils.ReportTypeSeparator)
+		if len(info) > 1 {
+			reportType = info[0]
+			reportSubType = info[1]
+		} else {
+			reportType = reportTypes[i]
+		}
+
+		ucsReports, err := es_utils.GetReports(ctx, logger,
+			"",            // no specific run
+			reportType,    // for this specific report type
+			reportSubType, // for this specific report subType
+			"",            // no filter on name
+			false,         // no vcs
+			true,          // only ucs
+			100)           // consider the last 100 runs. We have an average of 3 runs per week. Setting this higher.
+		// Runs older than two weeks will be discarded later on.
+
+		if err != nil {
+			logger.Info(fmt.Sprintf("Failed to get data for report %q. Error %v", reportTypes[i], err))
+			return nil, err
+		}
+
+		var rtyp es_utils.Report
+		data := make([]float64, 0)
+		for _, item := range ucsReports.Each(reflect.TypeOf(rtyp)) {
+			r := item.(es_utils.Report)
+
+			// Discard runs older than a week
+			lastValidTime := time.Now().Add(-14 * 24 * time.Hour)
+			if r.CreatedTime.After(lastValidTime) {
+				data = append(data, r.DurationInMinutes)
+			}
+		}
+
+		if len(data) > 0 {
+			ucsPlot := createDurationPlot("ucs", reportTypes[i], data, logger)
+			files = append(files, ucsPlot)
+		}
+	}
+
+	return files, nil
+}
+
+// getTestFiles for a given test collects the results in the last 30 runs.
+// Returns location of files with duration plot and a string containing list of runs where it passed/failed/skipped.
+func getTestFiles(ctx context.Context, testName string, logger logr.Logger) ([]string, string, error) {
+	vcsResults, err := es_utils.GetResults(ctx, logger, "", testName, true, false, false, false, false, 30)
+	if err != nil {
+		logger.Info(fmt.Sprintf("Failed to get results for test %q. Error %v", testName, err))
+		return nil, "", err
+	}
+	ucsResults, err := es_utils.GetResults(ctx, logger, "", testName, false, true, false, false, false, 30)
+	if err != nil {
+		logger.Info(fmt.Sprintf("Failed to get results for test %q. Error %v", testName, err))
+		return nil, "", err
+	}
+
+	var textMessage string
+
+	passedRuns := make([]int, 0)
+	failedRuns := make([]int, 0)
+	skippedRuns := make([]int, 0)
+	var rtyp es_utils.Result
+	vcsData := make([]float64, 0)
+	for _, item := range vcsResults.Each(reflect.TypeOf(rtyp)) {
+		r := item.(es_utils.Result)
+		if r.Result == "passed" {
+			passedRuns = append(passedRuns, r.Run)
+			vcsData = append(vcsData, r.DurationInMinutes)
+		} else if r.Result == "failed" {
+			failedRuns = append(failedRuns, r.Run)
+		} else if r.Result == "skipped" {
+			skippedRuns = append(skippedRuns, r.Run)
+		}
+	}
+	textMessage += appendResultsToMessage(passedRuns, failedRuns, skippedRuns, testName, "vcs")
+
+	passedRuns = make([]int, 0)
+	failedRuns = make([]int, 0)
+	skippedRuns = make([]int, 0)
+	ucsData := make([]float64, 0)
+	for _, item := range ucsResults.Each(reflect.TypeOf(rtyp)) {
+		r := item.(es_utils.Result)
+		if r.Result == "passed" {
+			passedRuns = append(passedRuns, r.Run)
+			ucsData = append(ucsData, r.DurationInMinutes)
+		} else if r.Result == "failed" {
+			failedRuns = append(failedRuns, r.Run)
+		} else if r.Result == "skipped" {
+			skippedRuns = append(skippedRuns, r.Run)
+		}
+	}
+	textMessage += appendResultsToMessage(passedRuns, failedRuns, skippedRuns, testName, "ucs")
+
+	files := make([]string, 0)
+
+	if len(ucsData) > 0 {
+		ucsPlot := createDurationPlot("ucs", testName, ucsData, logger)
+		files = append(files, ucsPlot)
+	}
+	if len(vcsData) > 0 {
+		vcsPlot := createDurationPlot("vcs", testName, vcsData, logger)
+		files = append(files, vcsPlot)
+	}
+
+	return files, textMessage, nil
 }

@@ -5,18 +5,16 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"time"
 
-	"github.com/andygrunwald/go-jira"
 	"github.com/go-logr/logr"
 	"github.com/jasonlvhit/gocron"
 	webexteams "github.com/jbogarin/go-cisco-webex-teams/sdk"
+	"github.com/olivere/elastic/v7"
 
 	es_utils "github.com/gianlucam76/cs-e2e-result/es_utils"
 	"github.com/gianlucam76/webex_bot/webex_utils"
 )
-
-// Considering an average of 3 runs per day. We want to run this weekly so 21 runs.
-const numberOfRuns int = 21
 
 type kv struct {
 	Key   string
@@ -28,30 +26,27 @@ type KVHeap []kv
 // WeeklyStats sends a summary of UCS and VCS weekly result
 func WeeklyStats(ctx context.Context,
 	webexClient *webexteams.Client, roomID string,
-	jiraClient *jira.Client,
 	logger logr.Logger) {
-	_ = gocron.Every(1).Friday().At("10:30:00").Do(SendStats,
-		ctx, webexClient, roomID, jiraClient, logger)
+	_ = gocron.Every(1).Friday().At("10:30:00").Do(sendStats,
+		ctx, webexClient, roomID, logger)
 }
 
 // sendStats collects all runs in the last "run".
 // Report tests the top 5 test which failed the most, if any.
-func SendStats(ctx context.Context,
+func sendStats(ctx context.Context,
 	webexClient *webexteams.Client, roomID string,
-	jiraClient *jira.Client,
 	logger logr.Logger) {
 	// Consider UCS runs
-	sendStatsPerEnvironment(ctx, webexClient, roomID, jiraClient, true, logger)
+	sendStatsPerEnvironment(ctx, webexClient, roomID, true, logger)
 	// Consider VCS runs
-	sendStatsPerEnvironment(ctx, webexClient, roomID, jiraClient, false, logger)
+	sendStatsPerEnvironment(ctx, webexClient, roomID, false, logger)
 }
 
 // sendWeeklyStats collects all runs in the last 7 days.
 // Report tests the top 5 test which failed the most, if any.
 func sendStatsPerEnvironment(ctx context.Context,
 	webexClient *webexteams.Client, roomID string,
-	jiraClient *jira.Client, ucs bool,
-	logger logr.Logger) {
+	ucs bool, logger logr.Logger) {
 	var env string
 
 	// failedTestMap contains, per test number of times test failed
@@ -59,7 +54,7 @@ func sendStatsPerEnvironment(ctx context.Context,
 	// failedTestMap contains, per test number of times test passed
 	passedTestMap := make(map[string]int)
 
-	collectStats(ctx, ucs, failedTestMap, passedTestMap, numberOfRuns, logger)
+	numberOfRuns := collectStats(ctx, ucs, failedTestMap, passedTestMap, logger)
 	if ucs {
 		env = "ucs"
 	} else {
@@ -81,7 +76,7 @@ func sendStatsPerEnvironment(ctx context.Context,
 				test.Key, test.Value, passed)
 		}
 	} else {
-		textMessage = fmt.Sprintf("Hello 🤚 Amazing work team. No test has failed in the last %d %s runs 🙌👏  \n",
+		textMessage = fmt.Sprintf("Hello 🤚 Amazing work team. No test has failed in the last %d %s runs 🙌 👏  \n",
 			numberOfRuns, env)
 	}
 
@@ -117,33 +112,32 @@ func (h *KVHeap) Pop() interface{} {
 	return x
 }
 
-// collectStats get latest numberOfRuns for either ucs or vcs.
+// collectStats get latest runs for either ucs or vcs.
+// No run older than a week is considered.
 // For each available runs:
 // - get all tests.
 // - walk all tests and update failedTestMap for each failed test
 // and passedTestMap for each test that passed.
 func collectStats(ctx context.Context, ucs bool,
 	failedTestMap, passedTestMap map[string]int,
-	numberOfRuns int,
-	logger logr.Logger) {
+	logger logr.Logger) int {
+	// On average we have 3 runs per day. Setting limit to 30. Any run older than a week
+	// will be discarded.
+	const numberOfRuns int = 30
+
 	env := "vcs"
 	if ucs {
 		env = "ucs"
 	}
 
-	// Get ES client
-	esClient, err := es_utils.GetClient()
-	if err != nil {
-		logger.Info(fmt.Sprintf("Failed to get es client. Err: %v", err))
-		return
-	}
-
 	// Get last numberOfRuns for this env (ucs vs vcs)
-	b, err := es_utils.GetAvailableRuns(ctx, esClient, env, numberOfRuns, logger)
+	b, err := es_utils.GetAvailableRuns(ctx, env, numberOfRuns, logger)
 	if err != nil {
 		logger.Info(fmt.Sprintf("Failed to get available UCS runs. Err: %v", err))
-		return
+		return 0
 	}
+
+	runs := 0
 
 	// For each available run, get all results
 	for _, bucket := range b.Buckets {
@@ -163,14 +157,34 @@ func collectStats(ctx context.Context, ucs bool,
 			continue
 		}
 
-		var rtyp es_utils.Result
-		for _, item := range results.Each(reflect.TypeOf(rtyp)) {
-			r := item.(es_utils.Result)
-			if r.Result == "failed" {
-				failedTestMap[r.Name]++
-			} else if r.Result == "passed" {
-				passedTestMap[r.Name]++
+		if shouldConsiderRun(results) {
+			runs++
+			var rtyp es_utils.Result
+			for _, item := range results.Each(reflect.TypeOf(rtyp)) {
+				r := item.(es_utils.Result)
+				if r.Result == "failed" {
+					failedTestMap[r.Name]++
+				} else if r.Result == "passed" {
+					passedTestMap[r.Name]++
+				}
 			}
 		}
 	}
+
+	return runs
+}
+
+// shouldConsiderRun returns true if results were collected in the
+// last week. False otherwise.
+func shouldConsiderRun(results *elastic.SearchResult) bool {
+	// Discard any run older than a week
+	lastValidTime := time.Now().Add(-7 * 24 * time.Hour)
+
+	var rtyp es_utils.Result
+	for _, item := range results.Each(reflect.TypeOf(rtyp)) {
+		r := item.(es_utils.Result)
+		return r.StartTime.After(lastValidTime)
+	}
+
+	return false
 }

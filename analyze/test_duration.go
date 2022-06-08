@@ -3,12 +3,11 @@ package analyze
 import (
 	"context"
 	"fmt"
-	"image/color"
+	"image/png"
 	"os"
 	"reflect"
-	"sort"
+	"time"
 
-	"github.com/andygrunwald/go-jira"
 	"github.com/go-echarts/go-echarts/v2/charts"
 	"github.com/go-echarts/go-echarts/v2/opts"
 	"github.com/go-logr/logr"
@@ -16,10 +15,7 @@ import (
 	"github.com/jasonlvhit/gocron"
 	webexteams "github.com/jbogarin/go-cisco-webex-teams/sdk"
 	"github.com/olivere/elastic/v7"
-	"gonum.org/v1/plot"
-	"gonum.org/v1/plot/plotter"
-	"gonum.org/v1/plot/plotutil"
-	"gonum.org/v1/plot/vg"
+	gim "github.com/ozankasikci/go-image-merge"
 
 	es_utils "github.com/gianlucam76/cs-e2e-result/es_utils"
 	"github.com/gianlucam76/webex_bot/utils"
@@ -27,27 +23,26 @@ import (
 )
 
 // Minimum number of successfull runs needed.
-const numberOfSuccessfulRuns int = 10
+const numberOfSuccessfulRuns int = 7
 
 // Minimum duration to run this metric (in minutes)
-const minDurationInMinutes float64 = 10
+const minDurationInMinutes float64 = 5
 
 // When relative standard deviation is higher than this value
 // an action is taken
 const rsdThreshold float64 = 10
 
-// CreatePieCharts
+// CreatePieCharts creates pie chart with test duration for last available VCS
+// and UCS run
 func CreatePieCharts(ctx context.Context,
 	webexClient *webexteams.Client, roomID string,
-	jiraClient *jira.Client,
 	logger logr.Logger) {
 	_ = gocron.Every(1).Friday().At("9:30:00").Do(sendDurationPieChart,
-		ctx, webexClient, roomID, jiraClient, logger)
+		ctx, webexClient, roomID, logger)
 }
 
 func sendDurationPieChart(ctx context.Context,
 	webexClient *webexteams.Client, roomID string,
-	jiraClient *jira.Client,
 	logger logr.Logger) {
 	if shouldSendPieChart(ctx, true, logger) {
 		// create pie chart for vcs
@@ -71,25 +66,22 @@ func sendDurationPieChart(ctx context.Context,
 }
 
 // CheckTestDurationOnUCS for each test in UCS:
-// - consider the last numberOfRuns runs;
+// - consider the runs in the last week;
 // - if the mean value is higher than minDurationInMinutes and
 // - if relative standard deviation is higher than rsdThreshold
 // send a message on the webex channel
 func CheckTestDurationOnUCS(ctx context.Context,
 	webexClient *webexteams.Client, roomID string,
-	jiraClient *jira.Client,
 	logger logr.Logger) {
 	_ = gocron.Every(1).Monday().At("11:30:00").Do(evaluateUCSTest,
-		ctx, webexClient, roomID, jiraClient, logger)
+		ctx, webexClient, roomID, logger)
 }
 
 func evaluateUCSTest(ctx context.Context,
 	webexClient *webexteams.Client, roomID string,
-	jiraClient *jira.Client,
 	logger logr.Logger) {
-	const maxMessage = 2
-
-	alreadySent := 0
+	maintainers := make(map[string]bool)
+	testFiles := make([]string, 0)
 
 	testNames, err := utils.BuildUCSTests(ctx, logger)
 	if err != nil {
@@ -98,29 +90,9 @@ func evaluateUCSTest(ctx context.Context,
 	}
 
 	for i := range testNames {
-		ucsResults, err := es_utils.GetResults(ctx, logger,
-			"",                     // no specific run
-			testNames[i],           // for this specific test
-			false,                  // no vcs
-			true,                   // only ucs
-			true,                   // only results where test passed
-			false,                  // no failed
-			false,                  // no skipped
-			numberOfSuccessfulRuns) // last numberOfRuns runs
+		data, maintainer, err := getTestData(ctx, testNames[i], logger)
 		if err != nil {
-			logger.Info(fmt.Sprintf("Failed to get results for test %q. Error %v", testNames[i], err))
-			return
-		}
-
-		var mantainer string
-		var rtyp es_utils.Result
-		data := make([]float64, 0)
-		runIds := make([]int, 0)
-		for _, item := range ucsResults.Each(reflect.TypeOf(rtyp)) {
-			r := item.(es_utils.Result)
-			mantainer = r.Maintainer
-			data = append(data, r.DurationInMinutes)
-			runIds = append(runIds, r.Run)
+			continue
 		}
 
 		if len(data) < numberOfSuccessfulRuns {
@@ -133,92 +105,15 @@ func evaluateUCSTest(ctx context.Context,
 			testNames[i], mean, std, rsd))
 
 		if mean >= minDurationInMinutes && rsd >= rsdThreshold {
-			alreadySent++
-			min, max := minMax(data)
-			textMessage := fmt.Sprintf("Hello 🤚 <@personEmail:%s@cisco.com|%s>  \nI detected something which I believe needs to be looked at.  \n",
-				mantainer, mantainer)
-			textMessage += fmt.Sprintf("For this test: %s The relative standard deviation: %f is higher than threshold: %f.  \n",
-				testNames[i], rsd, rsdThreshold)
-			textMessage += fmt.Sprintf("Min duration %f min. Max duration %f min", min, max)
-			textMessage += fmt.Sprintf("Mean value: %f. UCS samples: %d  \n", mean, numberOfSuccessfulRuns)
-			fileName := createDurationPlot(&testNames[i], data, runIds, mean, logger)
-			if err := webex_utils.SendMessageWithGraphs(webexClient, roomID, textMessage, []string{fileName}, logger); err != nil {
-				logger.Info(fmt.Sprintf("Failed to send message. Err: %v", err))
-			}
-			if alreadySent >= maxMessage {
-				break
-			}
+			file := createDurationPlot(&testNames[i], data, mean, logger)
+			testFiles = append(testFiles, file)
+			maintainers[maintainer] = true
 		}
 	}
-}
 
-func minMax(data []float64) (min, max float64) {
-	min = data[0]
-	max = data[0]
-	for _, value := range data {
-		if max < value {
-			max = value
-		}
-		if min > value {
-			min = value
-		}
+	if len(testFiles) > 0 {
+		sendAlertForTest(webexClient, roomID, testFiles, maintainers, logger)
 	}
-	return
-}
-
-func createDurationPlot(testName *string, data []float64, runIds []int, mean float64, logger logr.Logger) string {
-	logger.Info(fmt.Sprintf("Generate duration plot for test %s", *testName))
-
-	// Create a map: <run id> : <duration>
-	infoMap := make(map[int]float64)
-	for i := range runIds {
-		infoMap[runIds[i]] = data[i]
-	}
-
-	// Create temporary slice with run id values.
-	// This slice will then be sorted
-	tmp := make([]int, 0)
-	for k := range runIds {
-		tmp = append(tmp, runIds[k])
-	}
-	sort.Ints(tmp)
-
-	pts := make(plotter.XYs, len(data))
-	for i := range tmp {
-		pts[i].X = float64(tmp[i])
-		pts[i].Y = infoMap[tmp[i]]
-	}
-
-	p := plot.New()
-
-	p.Title.Text = *testName
-	p.X.Label.Text = "Run ID"
-	p.Y.Label.Text = "Time in minute"
-
-	min, max := minMax(data)
-	p.Y.Max = max + 5
-	p.Y.Min = min - 5
-	p.X.Max = float64(tmp[len(tmp)-1] + 5)
-
-	err := plotutil.AddLinePoints(p,
-		"Duration", pts)
-
-	meanPlot := plotter.NewFunction(func(x float64) float64 { return mean })
-	meanPlot.Color = color.RGBA{B: 255, A: 255}
-	p.Add(meanPlot)
-	p.Legend.Add("Mean", meanPlot)
-
-	if err != nil {
-		panic(err)
-	}
-
-	fileName := "/tmp/duration.png"
-	// Save the plot to a PNG file.
-	if err := p.Save(4*vg.Inch, 4*vg.Inch, fileName); err != nil {
-		panic(err)
-	}
-
-	return fileName
 }
 
 // getLastRunResults returns last run results
@@ -375,4 +270,81 @@ func shouldSendPieChart(ctx context.Context, vcs bool,
 	}
 
 	return false
+}
+
+// getTestData consider the last 30 UCS runs and for a given test returns:
+// - durations in a form of slice
+// - maintainer
+func getTestData(ctx context.Context, testName string, logger logr.Logger) (data []float64, maintainer string, err error) {
+	var ucsResults *elastic.SearchResult
+	ucsResults, err = es_utils.GetResults(ctx, logger,
+		"",       // no specific run
+		testName, // for this specific test
+		false,    // no vcs
+		true,     // only ucs
+		true,     // only results where test passed
+		false,    // no failed
+		false,    // no skipped
+		100)      // consider the last 100 runs. We have an average of 3 runs per week. Setting this higher.
+	// Runs older than two weeks will be discarded later on.
+	if err != nil {
+		logger.Info(fmt.Sprintf("Failed to get results for test %q. Error %v", testName, err))
+		return
+	}
+
+	var rtyp es_utils.Result
+	data = make([]float64, 0)
+	for _, item := range ucsResults.Each(reflect.TypeOf(rtyp)) {
+		r := item.(es_utils.Result)
+
+		// Discard runs older than two weeks
+		lastValidTime := time.Now().Add(-14 * 24 * time.Hour)
+		if r.StartTime.After(lastValidTime) {
+			maintainer = r.Maintainer
+			data = append(data, r.DurationInMinutes)
+		}
+	}
+
+	return
+}
+
+// sendAlertForTest generates a plot with test duration and send a webex message with such graph.
+func sendAlertForTest(webexClient *webexteams.Client, roomID string,
+	testFiles []string, maintainers map[string]bool,
+	logger logr.Logger) {
+
+	textMessage := "I detected something which I believe needs to be looked at. Tagging all maintainers:  \n"
+	for m := range maintainers {
+		textMessage += fmt.Sprintf("1. <@personEmail:%s@cisco.com|%s>  \n", m, m)
+	}
+	textMessage += "  \nFor the tests in the plot the relative standard deviation is too big.  \n"
+
+	x, y := getGridSize(len(testFiles))
+
+	grids := make([]*gim.Grid, 0)
+	for i := range testFiles {
+		tmpGrid := gim.Grid{ImageFilePath: testFiles[i]}
+		grids = append(grids, &tmpGrid)
+	}
+	rgba, err := gim.New(grids, x, y).Merge()
+	if err != nil {
+		logger.Info(fmt.Sprintf("Failed to create grid. Error %v", err))
+		return
+	}
+
+	gridFileName := "/tmp/test_analysis_grid.png"
+	file, err := os.Create(gridFileName)
+	if err != nil {
+		logger.Info(fmt.Sprintf("Failed to create grid file. Error %v", err))
+		return
+	}
+
+	if err = png.Encode(file, rgba); err != nil {
+		logger.Info(fmt.Sprintf("Failed to encode grid file. Error %v", err))
+		return
+	}
+
+	if err := webex_utils.SendMessageWithGraphs(webexClient, roomID, textMessage, []string{gridFileName}, logger); err != nil {
+		logger.Info(fmt.Sprintf("Failed to send message. Err: %v", err))
+	}
 }
