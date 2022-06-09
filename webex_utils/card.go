@@ -81,6 +81,13 @@ var card = `{
                             "weight": "Lighter",
                             "color": "Light",
                             "spacing": "Small"
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": "Reports:",
+                            "weight": "Lighter",
+                            "color": "Light",
+                            "spacing": "Small"
                         }
                     ]
                 },
@@ -118,6 +125,13 @@ var card = `{
                         {
                             "type": "TextBlock",
                             "text": "\"charts\" to send test duration pie chart",
+                            "weight": "Lighter",
+                            "color": "Light",
+                            "spacing": "Small"
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": "\"reports\" to send cloudstack report plots",
                             "weight": "Lighter",
                             "color": "Light",
                             "spacing": "Small"
