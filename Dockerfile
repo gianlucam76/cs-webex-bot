@@ -23,6 +23,7 @@ COPY main.go main.go
 COPY webex_utils/ webex_utils/
 COPY utils/ utils/
 COPY analyze/ analyze/
+COPY learning/ learning/
 
 # Build
 RUN GOOS=linux GOARCH=$ARCH go build -a -o webex_bot main.go

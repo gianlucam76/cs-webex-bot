@@ -8,6 +8,7 @@ import (
 	"image/png"
 	"os"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -32,6 +33,7 @@ import (
 	es_utils "github.com/gianlucam76/cs-e2e-result/es_utils"
 	jira_utils "github.com/gianlucam76/jira_utils/jira"
 	"github.com/gianlucam76/webex_bot/analyze"
+	"github.com/gianlucam76/webex_bot/learning"
 	"github.com/gianlucam76/webex_bot/utils"
 	"github.com/gianlucam76/webex_bot/webex_utils"
 )
@@ -47,6 +49,7 @@ const (
 	pieChartText        = "charts"
 	reportText          = "reports"
 	summaryText         = "summary"
+	splitIssueText      = "split"
 )
 
 var pollInterval time.Duration
@@ -100,6 +103,8 @@ func main() {
 	// Generate pie charts for UCS and VCS considering test durations
 	analyze.CreatePieCharts(ctx, webexClient, room.ID, logger)
 
+	learning.AnalyzeOpenIssues(ctx, webexClient, room.ID, jiraClient, logger)
+
 	go startCron()
 
 	// Bot will respond to one message at a time.
@@ -140,6 +145,8 @@ func main() {
 					handleReportRequest(ctx, webexClient, room.ID, from, logger)
 				} else if strings.Contains(m.Text, summaryText) {
 					handleSummaryRequest(ctx, webexClient, room.ID, from, logger)
+				} else if strings.Contains(m.Text, splitIssueText) {
+					handleSplitIssueRequest(ctx, webexClient, room.ID, from, m.Text, jiraClient, logger)
 				} else if testName, isMatch, err := doesMatchTest(ctx, webexClient, room.ID, from, m.Text, logger); err == nil {
 					if isMatch {
 						sendMessageWithTestResult(ctx, webexClient, room.ID, from, testName, logger)
@@ -178,15 +185,7 @@ func handleOpenIssueRequest(ctx context.Context, webexClient *webexteams.Client,
 	jiraClient *jira.Client, roomID, from string, logger logr.Logger) {
 	logger.Info("Handling open issue request")
 
-	project, err := jira_utils.GetJiraProject(ctx, jiraClient, "", logger)
-	if err != nil || project == nil {
-		logger.Info(fmt.Sprintf("Failed to get jira project. Err: %v", err))
-		return
-	}
-
-	jql := fmt.Sprintf("Status NOT IN (Resolved,Closed) and reporter = atom-ci.gen and project = %s",
-		project.Name)
-	issues, err := jira_utils.GetJiraIssues(ctx, jiraClient, jql, logger)
+	issues, err := utils.GetOpenIssues(ctx, jiraClient, logger)
 	if err != nil {
 		logger.Info(fmt.Sprintf("Failed to get open issues. Err: %v", err))
 		return
@@ -377,6 +376,64 @@ func handleReportRequest(ctx context.Context, webexClient *webexteams.Client,
 
 	if err := webex_utils.SendMessageWithGraphs(webexClient, roomID, textMessage,
 		[]string{gridFileName}, logger); err != nil {
+		logger.Info(fmt.Sprintf("Failed to send message. Err: %v", err))
+	}
+}
+
+func handleSplitIssueRequest(ctx context.Context, webexClient *webexteams.Client,
+	roomID, from, text string, jiraClient *jira.Client, logger logr.Logger) {
+	logger.Info("Handling split request")
+
+	index := strings.Index(text, splitIssueText)
+	if index == -1 {
+		logger.Info(fmt.Sprintf("Failed to find %s in `%s`", splitIssueText, text))
+	}
+
+	openIssues, err := utils.GetOpenIssues(ctx, jiraClient, logger)
+	if err != nil {
+		return
+	}
+
+	re := regexp.MustCompile(`[-]?\d[\d,]*`)
+	submatchall := re.FindAllString(text[index:], -1)
+
+	if len(submatchall) == 0 || len(submatchall) > 1 {
+		msg := fmt.Sprintf("I am able to split only one issue at time. Found %d in `%s`",
+			len(submatchall), text)
+		logger.Info(msg)
+		if err := webex_utils.SendMessage(webexClient, roomID, msg, logger); err != nil {
+			logger.Info(fmt.Sprintf("Failed to send message. Err: %v", err))
+		}
+		return
+	}
+
+	found := false
+	var webexMessage string
+	element := submatchall[0]
+	for i := range openIssues {
+		issue := &openIssues[i]
+		if strings.Contains(issue.Key, element) { // issue.Key CLOUDSTACK-3509 element is just 3509
+			found = true
+			if result, err := utils.SplitIssue(ctx, jiraClient, issue, logger); err != nil {
+				webexMessage = fmt.Sprintf("Failed to split issue %s. Error %v", issue.Key, err)
+			} else if len(result) > 0 {
+				webexMessage = "Created new issues:  \n"
+				for i := range result {
+					webexMessage += fmt.Sprintf("[%s](https://jira-eng-sjc10.cisco.com/jira/browse/%s)", result[i], result[i])
+				}
+			} else {
+				webexMessage = fmt.Sprintf("Did not find any way to split issue [%s](https://jira-eng-sjc10.cisco.com/jira/browse/CLOUDSTACK-%s)",
+					element, element)
+			}
+			break
+		}
+	}
+
+	if !found {
+		webexMessage = fmt.Sprintf("did not find any open issue matching the request %s", text)
+	}
+
+	if err := webex_utils.SendMessage(webexClient, roomID, webexMessage, logger); err != nil {
 		logger.Info(fmt.Sprintf("Failed to send message. Err: %v", err))
 	}
 }

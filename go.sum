@@ -38,8 +38,8 @@ github.com/fortytw2/leaktest v1.3.0/go.mod h1:jDsjWgpAGjm2CA7WthBh/CdZYEPF31XHqu
 github.com/fsnotify/fsnotify v1.4.7/go.mod h1:jwhsz4b93w/PPRr/qN1Yymfu8t87LnFCMoQvtojpjFo=
 github.com/gianlucam76/cs-e2e-result v0.0.0-20220607200748-ae2b6b28fd29 h1:rfdBQ2Vg7bL9LDV8a2wtP9zyhxGpn7wHf/EcutJ8QVY=
 github.com/gianlucam76/cs-e2e-result v0.0.0-20220607200748-ae2b6b28fd29/go.mod h1:nRi7c/+YNOg/UVEl/fyFIs6PALpSUav/tcFsqFaOLy0=
-github.com/gianlucam76/jira_utils v0.0.0-20220512213334-3ec06f3ee7d5 h1:jOcyQ388sYY1y+CIGnI4oYtUT/Smjy3J6a3dUEHER6A=
-github.com/gianlucam76/jira_utils v0.0.0-20220512213334-3ec06f3ee7d5/go.mod h1:ghswX0iUSI0uJWhNWK696FLhQ2/vc6AXOSlFCZZKlNM=
+github.com/gianlucam76/jira_utils v0.0.0-20220610223332-9e3967354456 h1:IIOaONFpp4Q3cgrnELBlCzutZ9xoBvOap8KKeuOCcBc=
+github.com/gianlucam76/jira_utils v0.0.0-20220610223332-9e3967354456/go.mod h1:ghswX0iUSI0uJWhNWK696FLhQ2/vc6AXOSlFCZZKlNM=
 github.com/go-echarts/go-echarts/v2 v2.2.4 h1:SKJpdyNIyD65XjbUZjzg6SwccTNXEgmh+PlaO23g2H0=
 github.com/go-echarts/go-echarts/v2 v2.2.4/go.mod h1:6TOomEztzGDVDkOSCFBq3ed7xOYfbOqhaBzD0YV771A=
 github.com/go-fonts/dejavu v0.1.0 h1:JSajPXURYqpr+Cu8U9bt8K+XcACIHWqWrvWCKyeFmVQ=

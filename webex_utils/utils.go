@@ -133,7 +133,7 @@ func sendMessage(c *webexteams.Client, message *webexteams.MessageCreateRequest,
 		return err
 	}
 
-	logger.V(1).Info(fmt.Sprintf("response: %s", string(resp.Body())))
+	logger.V(10).Info(fmt.Sprintf("response: %s", string(resp.Body())))
 
 	logger.Info(fmt.Sprintf("Message ID %s", msg.ID))
 
