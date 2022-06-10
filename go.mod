@@ -5,7 +5,7 @@ go 1.17
 require (
 	github.com/andygrunwald/go-jira v1.15.1
 	github.com/gianlucam76/cs-e2e-result v0.0.0-20220607200748-ae2b6b28fd29
-	github.com/gianlucam76/jira_utils v0.0.0-20220512213334-3ec06f3ee7d5
+	github.com/gianlucam76/jira_utils v0.0.0-20220610223332-9e3967354456
 	github.com/go-echarts/go-echarts/v2 v2.2.4
 	github.com/go-logr/logr v1.2.3
 	github.com/gonum/stat v0.0.0-20181125101827-41a0da705a5b

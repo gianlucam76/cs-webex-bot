@@ -4,12 +4,20 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
+
+	"github.com/andygrunwald/go-jira"
+	"github.com/go-logr/logr"
 
 	"github.com/gianlucam76/cs-e2e-result/es_utils"
-	"github.com/go-logr/logr"
+	jira_utils "github.com/gianlucam76/jira_utils/jira"
 )
 
-const ReportTypeSeparator = "---"
+const (
+	ReportTypeSeparator        = "---"
+	AtomUser            string = "atom-ci.gen"
+	LCSBoardName        string = "CloudStack - LCS"
+)
 
 // BuildUCSTests creates:
 // - a slice containing all test names
@@ -186,4 +194,145 @@ func GetLastNRuns(ctx context.Context, vcs bool, runs int, logger logr.Logger) (
 	}
 
 	return lastRuns, nil
+}
+
+// GetOpenIssues returns open issues filed by atom user during e2e tagging sanity
+func GetOpenIssues(ctx context.Context, jiraClient *jira.Client, logger logr.Logger) ([]jira.Issue, error) {
+	project, err := jira_utils.GetJiraProject(ctx, jiraClient, "", logger)
+	if err != nil || project == nil {
+		logger.Info(fmt.Sprintf("Failed to get jira project. Err: %v", err))
+		return nil, err
+	}
+
+	jql := fmt.Sprintf("Status NOT IN (Resolved,Closed) and reporter = atom-ci.gen and project = %s",
+		project.Name)
+	issues, err := jira_utils.GetJiraIssues(ctx, jiraClient, jql, logger)
+	if err != nil {
+		logger.Info(fmt.Sprintf("Failed to get open issues. Err: %v", err))
+		return nil, err
+	}
+
+	return issues, nil
+}
+
+// SplitIssue gets all comments for passed issue.
+// Any comment added by atomUser represents an e2e tagging sanity failures.
+// If different failures are identified, new issue is filed.
+func SplitIssue(ctx context.Context, jiraClient *jira.Client, issue *jira.Issue, logger logr.Logger) ([]string, error) {
+	project, err := jira_utils.GetJiraProject(ctx, jiraClient, "", logger)
+	if err != nil || project == nil {
+		logger.Info(fmt.Sprintf("Failed to get jira project. Err: %v", err))
+		return nil, err
+	}
+
+	board, err := jira_utils.GetJiraBoard(ctx, jiraClient, project.Key, LCSBoardName, logger)
+	if err != nil || board == nil {
+		logger.Info(fmt.Sprintf("Failed to get jira board. Err %v", err))
+		return nil, err
+	}
+
+	activeSprint, err := jira_utils.GetJiraActiveSprint(ctx, jiraClient, fmt.Sprintf("%d", board.ID), logger)
+	if err != nil || activeSprint == nil {
+		logger.Info(fmt.Sprintf("Failed to get active sprint. Err: %v", err))
+		return nil, err
+	}
+
+	priority := jira.Priority{Name: "P1"}
+
+	options := &jira.GetQueryOptions{Expand: "renderedFields"}
+	u, _, err := jiraClient.Issue.Get(issue.Key, options)
+	if err != nil {
+		logger.Info(fmt.Sprintf("Failed to query renderedFields. Error: %v\n", err))
+		return nil, err
+	}
+
+	// Walk all comment added by Atom user to this issue.
+	// Any comment is a failure (different run for sure, possibly different method as well)
+	// For any comment representing a different location where failure happened, create a new issue.
+
+	var originalIssue string
+
+	// This map contains per each failure the corresponding new jira issue (key) filed
+	newIssues := make(map[string]string)
+	for _, c := range u.RenderedFields.Comments.Comments {
+		if c.Author.Name == AtomUser { // Consider only comment added by Atom user
+			if tmp, err := GetFunctionName(c, logger); err == nil {
+				if tmp == "" {
+					// Nothing to do. We were not able to identify in which method issue failed
+					// when this comment was added
+					continue
+				} else if originalIssue == "" || tmp == originalIssue {
+					// This comment was added for a different run. But the method were failure happened
+					// matches first failure reported in this issue.
+					originalIssue = tmp
+				} else if v, ok := newIssues[tmp]; ok {
+					// This comment was added for a failure that happened in the same test but in a different
+					// method.
+					// We have already seen other comments like this one. So a new jira issue has been already
+					// created. Simply add this comment to the new jira issue and remove it from the issue we
+					// were request to split into multiple.
+					if _, _, err := jiraClient.Issue.AddCommentWithContext(ctx, issue.ID, c); err != nil {
+						logger.Info("Failed to add new comment to issue %s", v)
+						continue
+					}
+					// Remove comment from issue
+					if err := jiraClient.Issue.DeleteCommentWithContext(ctx, issue.ID, c.ID); err != nil {
+						logger.Info("Failed to delete comment from issue %s", issue.Key)
+						continue
+					}
+				} else {
+					// This comment is referencing a failure never seen so far. So first create new issue then move comment.
+					if newIssue, err := jira_utils.CreateIssue(ctx, jiraClient, activeSprint, &priority, project.Key, "e2e",
+						issue.Fields.Assignee.Name, "", issue.Fields.Summary, logger); err != nil {
+						logger.Info("Failed to create new issue. Err: %v", err)
+						continue
+					} else {
+						if _, _, err := jiraClient.Issue.AddCommentWithContext(ctx, newIssue.ID, c); err != nil {
+							logger.Info("Failed to add new comment to issue %s", newIssue.ID)
+							continue
+						}
+						// Remove comment from issue
+						if err := jiraClient.Issue.DeleteCommentWithContext(ctx, issue.ID, c.ID); err != nil {
+							logger.Info("Failed to delete comment from issue %s", issue.Key)
+							continue
+						}
+						newIssues[tmp] = newIssue.Key
+					}
+				}
+			}
+		}
+	}
+
+	result := make([]string, 0)
+	for key := range newIssues {
+		result = append(result, key)
+	}
+
+	return result, nil
+}
+
+// GetFunctionName returns the name of the function where failure happened.
+// When Jira issue is filed for an e2e tagging sanity, comment contains:
+// - Failure Location: <line where failure happened>
+// - Full Stack Trace: <method where failure happened> + <full stack trace>
+// getFunctionName extracts the name of the method where failure happened
+func GetFunctionName(c *jira.Comment, logger logr.Logger) (string, error) {
+	if c.Author.Name != AtomUser {
+		return "", fmt.Errorf("comment not added by %s", AtomUser)
+	}
+
+	const fullStackTraceText string = "Full Stack Trace "
+	fullStackTraceIndex := strings.Index(c.Body, fullStackTraceText)
+	if fullStackTraceIndex == -1 {
+		logger.Info("full strack trace not present")
+		return "", fmt.Errorf("full strack trace not present")
+	}
+	begin := fullStackTraceIndex + len(fullStackTraceText)
+	spaceIndex := strings.Index(c.Body[begin:], "0x")
+	if spaceIndex == -1 {
+		logger.Info("full strack trace is malformed")
+		return "", fmt.Errorf("full strack trace is malformed")
+	}
+	end := begin + spaceIndex
+	return strings.TrimSuffix(c.Body[begin:end], "."), nil
 }
