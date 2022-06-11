@@ -95,6 +95,8 @@ func evaluateUCSTest(ctx context.Context,
 			continue
 		}
 
+		utils.Reverse(data)
+
 		if len(data) < numberOfSuccessfulRuns {
 			continue
 		}
