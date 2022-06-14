@@ -33,7 +33,6 @@ import (
 	es_utils "github.com/gianlucam76/cs-e2e-result/es_utils"
 	jira_utils "github.com/gianlucam76/jira_utils/jira"
 	"github.com/gianlucam76/webex_bot/analyze"
-	"github.com/gianlucam76/webex_bot/learning"
 	"github.com/gianlucam76/webex_bot/utils"
 	"github.com/gianlucam76/webex_bot/webex_utils"
 )
@@ -103,7 +102,8 @@ func main() {
 	// Generate pie charts for UCS and VCS considering test durations
 	analyze.CreatePieCharts(ctx, webexClient, room.ID, logger)
 
-	learning.AnalyzeOpenIssues(ctx, webexClient, room.ID, jiraClient, logger)
+	// TODO: re-enable this
+	// learning.AnalyzeOpenIssues(ctx, webexClient, room.ID, jiraClient, logger)
 
 	go startCron()
 
@@ -789,6 +789,9 @@ func getReportFiles(ctx context.Context, logger logr.Logger) ([]string, error) {
 		}
 
 		if len(data) > 0 {
+			// Results are returned with last one first.
+			// Reverse the order while creating a plot
+			utils.Reverse(data)
 			ucsPlot := createDurationPlot("ucs", reportTypes[i], data, logger)
 			files = append(files, ucsPlot)
 		}
@@ -851,10 +854,16 @@ func getTestFiles(ctx context.Context, testName string, logger logr.Logger) ([]s
 	files := make([]string, 0)
 
 	if len(ucsData) > 0 {
+		// Results are returned with last one first.
+		// Reverse the order while creating a plot
+		utils.Reverse(ucsData)
 		ucsPlot := createDurationPlot("ucs", testName, ucsData, logger)
 		files = append(files, ucsPlot)
 	}
 	if len(vcsData) > 0 {
+		// Results are returned with last one first.
+		// Reverse the order while creating a plot
+		utils.Reverse(vcsData)
 		vcsPlot := createDurationPlot("vcs", testName, vcsData, logger)
 		files = append(files, vcsPlot)
 	}
