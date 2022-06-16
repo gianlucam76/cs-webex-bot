@@ -249,8 +249,8 @@ func splitOpenIssues(ctx context.Context, webexClient *webexteams.Client, roomID
 			for k := range fullStackTraces {
 				msg += fmt.Sprintf("%s  \n", k)
 			}
-			msg += "Please considering splitting this issue into multiple ones so we can debug all."
-			msg += "If you prefer me to do it, please ask me to \"split <issue key>\" (for instance \"split 3508\")"
+			msg += "  \nPlease considering splitting this issue into multiple ones so we can debug all."
+			msg += fmt.Sprintf("If you prefer me to do it, please ask me to (\"split %s\")", issue.Key)
 			logger.Info(msg)
 			if err = webex_utils.SendMessage(webexClient, roomID, msg, logger); err != nil {
 				logger.Info(fmt.Sprintf("Failed to send message. Err: %v", err))

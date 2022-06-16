@@ -199,12 +199,25 @@ func handleOpenIssueRequest(ctx context.Context, webexClient *webexteams.Client,
 	} else {
 		textMessage += "Here is the list of open issues:  \n"
 		for i := range issues {
+			options := &jira.GetQueryOptions{Expand: "renderedFields"}
+			u, _, err := jiraClient.Issue.Get(issues[i].Key, options)
+			times := 0
+			if err != nil {
+				logger.Info(fmt.Sprintf("Failed to query renderedFields. Error: %v\n", err))
+			} else {
+				for _, c := range u.RenderedFields.Comments.Comments {
+					if c.Author.Name == utils.AtomUser {
+						times++
+					}
+				}
+			}
+
 			createdTime := time.Time(issues[i].Fields.Created)
 			diff := time.Since(createdTime)
 			lastUpdate := fmt.Sprintf("%d days", int(diff.Hours()/24))
 			assignee := issues[i].Fields.Assignee.Name
-			textMessage += fmt.Sprintf("[%s](https://jira-eng-sjc10.cisco.com/jira/browse/%s). Issue opened %s ago. Assignee <@personEmail:%s@cisco.com|%s>  \n",
-				issues[i].Key, issues[i].Key, lastUpdate, assignee, assignee)
+			textMessage += fmt.Sprintf("[%s](https://jira-eng-sjc10.cisco.com/jira/browse/%s). Issue opened %s ago. Assignee <@personEmail:%s@cisco.com|%s>  (issue seen %d times since filed)\n",
+				issues[i].Key, issues[i].Key, lastUpdate, assignee, assignee, times)
 		}
 	}
 
@@ -394,7 +407,7 @@ func handleSplitIssueRequest(ctx context.Context, webexClient *webexteams.Client
 		return
 	}
 
-	re := regexp.MustCompile(`[-]?\d[\d,]*`)
+	re := regexp.MustCompile("[0-9]+")
 	submatchall := re.FindAllString(text[index:], -1)
 
 	if len(submatchall) == 0 || len(submatchall) > 1 {
@@ -410,6 +423,7 @@ func handleSplitIssueRequest(ctx context.Context, webexClient *webexteams.Client
 	found := false
 	var webexMessage string
 	element := submatchall[0]
+
 	for i := range openIssues {
 		issue := &openIssues[i]
 		if strings.Contains(issue.Key, element) { // issue.Key CLOUDSTACK-3509 element is just 3509
