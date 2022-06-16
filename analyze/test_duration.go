@@ -107,7 +107,8 @@ func evaluateUCSTest(ctx context.Context,
 			testNames[i], mean, std, rsd))
 
 		if mean >= minDurationInMinutes && rsd >= rsdThreshold {
-			file := createDurationPlot(&testNames[i], data, mean, logger)
+			environment := "ucs"
+			file := CreateDurationPlot(&environment, &testNames[i], data, mean, logger)
 			testFiles = append(testFiles, file)
 			maintainers[maintainer] = true
 		}
@@ -300,7 +301,7 @@ func getTestData(ctx context.Context, testName string, logger logr.Logger) (data
 		r := item.(es_utils.Result)
 
 		// Discard runs older than two weeks
-		lastValidTime := time.Now().Add(-14 * 24 * time.Hour)
+		lastValidTime := time.Now().Add(-13 * 24 * time.Hour)
 		if r.StartTime.After(lastValidTime) {
 			maintainer = r.Maintainer
 			data = append(data, r.DurationInMinutes)
@@ -321,7 +322,7 @@ func sendAlertForTest(webexClient *webexteams.Client, roomID string,
 	}
 	textMessage += "  \nFor the tests in the plot the relative standard deviation is too big.  \n"
 
-	x, y := getGridSize(len(testFiles))
+	x, y := GetGridSize(len(testFiles))
 
 	grids := make([]*gim.Grid, 0)
 	for i := range testFiles {

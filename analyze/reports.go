@@ -24,7 +24,7 @@ import (
 const numberOfAvailableRuns int = 7
 
 // CheckReportDurationOnUCS for each reports in UCS:
-// - consider the runs in the last week;
+// - consider the runs in the two last week;
 // - if relative standard deviation is higher than rsdThreshold
 // send a message on the webex channel
 func CheckReportDurationOnUCS(ctx context.Context,
@@ -50,21 +50,21 @@ func evaluateUCSReports(ctx context.Context,
 
 	reportFiles := make([]string, 0)
 
-	files := analyzeByGroupingForTypeAndSubtype(ctx, reportTypes, webexClient, roomID, logger)
+	files := analyzeByGroupingForTypeAndSubtype(ctx, reportTypes, logger)
 	reportFiles = append(reportFiles, files...)
-	files = analyzeByGroupingForTypeSubtypeAndName(ctx, reportTypes, webexClient, roomID, logger)
+	files = analyzeByGroupingForTypeSubtypeAndName(ctx, reportTypes, logger)
 	reportFiles = append(reportFiles, files...)
 
 	if len(reportFiles) > 0 {
-		sendAlertForReport(webexClient, roomID, reportFiles, logger)
+		textMessage := "Hello I detected something which I believe needs to be looked at.  \n"
+		textMessage += "For the reports in the plot the relative standard deviation is too big.  \n"
+		sendAlertForReport(webexClient, roomID, textMessage, reportFiles, logger)
 	}
 }
 
 // analyzeByGroupingForTypeAndSubtype groups reports by type and subType if available (name is ignored).
 // Collects durations and if there is too much variance, sends an alert to the webex space.
-func analyzeByGroupingForTypeAndSubtype(ctx context.Context, reportTypes []string,
-	webexClient *webexteams.Client, roomID string,
-	logger logr.Logger) []string {
+func analyzeByGroupingForTypeAndSubtype(ctx context.Context, reportTypes []string, logger logr.Logger) []string {
 	reportFiles := make([]string, 0)
 
 	for i := range reportTypes {
@@ -92,8 +92,12 @@ func analyzeByGroupingForTypeAndSubtype(ctx context.Context, reportTypes []strin
 			reportTypes[i], mean, std, rsd))
 
 		if rsd >= rsdThreshold {
+			// Results are returned with last one first.
+			// Reverse the order while creating a plot
+			utils.Reverse(durations)
 			reportName := reportTypes[i]
-			fileName := createDurationPlot(&reportName, durations, mean, logger)
+			environment := "ucs"
+			fileName := CreateDurationPlot(&environment, &reportName, durations, mean, logger)
 			reportFiles = append(reportFiles, fileName)
 		}
 	}
@@ -104,9 +108,7 @@ func analyzeByGroupingForTypeAndSubtype(ctx context.Context, reportTypes []strin
 // analyzeByGroupingForTypeSubtypeAndName groups reports by type and subType if available.
 // If it detects name as constant accross multiple runs, uses the name to group as well.
 // Collects durations and if there is too much variance, sends an alert to the webex space.
-func analyzeByGroupingForTypeSubtypeAndName(ctx context.Context, reportTypes []string,
-	webexClient *webexteams.Client, roomID string,
-	logger logr.Logger) []string {
+func analyzeByGroupingForTypeSubtypeAndName(ctx context.Context, reportTypes []string, logger logr.Logger) []string {
 	reportFiles := make([]string, 0)
 
 	for i := range reportTypes {
@@ -136,7 +138,7 @@ func analyzeByGroupingForTypeSubtypeAndName(ctx context.Context, reportTypes []s
 		}
 
 		logger.Info(fmt.Sprintf("Report %s name appears to be NOT random", reportTypes[i]))
-		files := analyzePerNameReports(reportTypes[i], reportByName, webexClient, roomID, logger)
+		files := analyzePerNameReports(reportTypes[i], reportByName, logger)
 		reportFiles = append(reportFiles, files...)
 	}
 
@@ -144,7 +146,6 @@ func analyzeByGroupingForTypeSubtypeAndName(ctx context.Context, reportTypes []s
 }
 
 func analyzePerNameReports(reportInfo string, reportByName map[string][]es_utils.Report,
-	webexClient *webexteams.Client, roomID string,
 	logger logr.Logger) []string {
 	reportFiles := make([]string, 0)
 
@@ -168,7 +169,12 @@ func analyzePerNameReports(reportInfo string, reportByName map[string][]es_utils
 			reportInfo, name, mean, std, rsd))
 
 		if rsd >= rsdThreshold {
-			fileName := createDurationPlot(&reportInfo, durations, mean, logger)
+			// Results are returned with last one first.
+			// Reverse the order while creating a plot
+			utils.Reverse(durations)
+			environment := "ucs"
+			reportByName := fmt.Sprintf("%s_%s", reportInfo, name)
+			fileName := CreateDurationPlot(&environment, &reportByName, durations, mean, logger)
 			reportFiles = append(reportFiles, fileName)
 		}
 	}
@@ -186,7 +192,7 @@ func getDurations(data []es_utils.Report) []float64 {
 }
 
 // getReportData for a given report (type and subtype if available) considers the last 30 runs,
-// filtering out any run older than a week.
+// filtering out any run older than two week.
 // Returns a slice with all durations.
 func getReportData(ctx context.Context, reportInfo string, logger logr.Logger) ([]es_utils.Report, error) {
 	var reportType, reportSubType string
@@ -229,12 +235,9 @@ func getReportData(ctx context.Context, reportInfo string, logger logr.Logger) (
 }
 
 // sendAlertForReport generates a plot with duration and send a webex message with such graph.
-func sendAlertForReport(webexClient *webexteams.Client, roomID string,
+func sendAlertForReport(webexClient *webexteams.Client, roomID, textMessage string,
 	reportFiles []string, logger logr.Logger) {
-	textMessage := "Hello I detected something which I believe needs to be looked at.  \n"
-	textMessage += "For the reports in the plot the relative standard deviation is too big.  \n"
-
-	x, y := getGridSize(len(reportFiles))
+	x, y := GetGridSize(len(reportFiles))
 
 	grids := make([]*gim.Grid, 0)
 	for i := range reportFiles {

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"reflect"
 	"strings"
 
@@ -147,6 +148,46 @@ func BuildUCSReports(ctx context.Context, logger logr.Logger) ([]string, error) 
 	return reportType, nil
 }
 
+// BuildUCSUsageReports creates:
+// - a slice containing all pods for which at least a usage report was found
+func BuildUCSUsageReports(ctx context.Context, logger logr.Logger) ([]string, error) {
+	reports := make([]string, 0)
+
+	runs, err := GetLastNRuns(ctx, false, 5, logger)
+	if err != nil {
+		return nil, err
+	}
+
+	// a map listing usage report per pod
+	reportsMap := make(map[string]bool)
+
+	for i := range runs {
+		reports, err := es_utils.GetUsageReports(ctx, logger,
+			fmt.Sprintf("%d", runs[i]), // filter on this run
+			"",                         // no pod filter.
+			false,                      // no vcs. VCS has subsets of tests.
+			true,                       // from ucs. UCS has all tests.
+			200,
+		)
+		if err != nil {
+			logger.Info(fmt.Sprintf("Failed to get failed usage reports in ucs from elastic DB. Err: %v", err))
+			continue
+		}
+
+		var rtyp es_utils.UsageReport
+		for _, item := range reports.Each(reflect.TypeOf(rtyp)) {
+			r := item.(es_utils.UsageReport)
+			reportsMap[r.Name] = true
+		}
+	}
+
+	for k := range reportsMap {
+		reports = append(reports, k)
+	}
+
+	return reports, nil
+}
+
 // GetLastRun returns last run ID.
 // vcs bool controls whether that is going to be for last VCS run or UCS run
 func GetLastRun(ctx context.Context, vcs bool, logger logr.Logger) (int64, error) {
@@ -219,29 +260,24 @@ func GetOpenIssues(ctx context.Context, jiraClient *jira.Client, logger logr.Log
 // SplitIssue gets all comments for passed issue.
 // Any comment added by atomUser represents an e2e tagging sanity failures.
 // If different failures are identified, new issue is filed.
-func SplitIssue(ctx context.Context, jiraClient *jira.Client, issue *jira.Issue, logger logr.Logger) ([]string, error) {
-	project, err := jira_utils.GetJiraProject(ctx, jiraClient, "", logger)
-	if err != nil || project == nil {
-		logger.Info(fmt.Sprintf("Failed to get jira project. Err: %v", err))
-		return nil, err
-	}
-
-	board, err := jira_utils.GetJiraBoard(ctx, jiraClient, project.Key, LCSBoardName, logger)
-	if err != nil || board == nil {
-		logger.Info(fmt.Sprintf("Failed to get jira board. Err %v", err))
-		return nil, err
-	}
-
-	activeSprint, err := jira_utils.GetJiraActiveSprint(ctx, jiraClient, fmt.Sprintf("%d", board.ID), logger)
+func SplitIssue(ctx context.Context, jiraClient *jira.Client, issueToSplit *jira.Issue, openIssues []jira.Issue,
+	logger logr.Logger) ([]string, error) {
+	logger.Info(fmt.Sprintf("SplitIssue %s", issueToSplit.Key))
+	project, activeSprint, err := getJiraProjectAndActiveSprint(ctx, jiraClient, logger)
 	if err != nil || activeSprint == nil {
-		logger.Info(fmt.Sprintf("Failed to get active sprint. Err: %v", err))
+		logger.Info(fmt.Sprintf("Failed to get project or active sprint. Err: %v", err))
 		return nil, err
 	}
 
-	priority := jira.Priority{Name: "P1"}
+	// Consider all open issues, excluding:
+	// - any issue with multiple failures.
+	// Build a map:
+	// - key: failure
+	// - value: issue
+	existingFailureMap := buildFailureMap(ctx, jiraClient, openIssues, logger)
 
 	options := &jira.GetQueryOptions{Expand: "renderedFields"}
-	u, _, err := jiraClient.Issue.Get(issue.Key, options)
+	u, _, err := jiraClient.Issue.Get(issueToSplit.Key, options)
 	if err != nil {
 		logger.Info(fmt.Sprintf("Failed to query renderedFields. Error: %v\n", err))
 		return nil, err
@@ -251,53 +287,60 @@ func SplitIssue(ctx context.Context, jiraClient *jira.Client, issue *jira.Issue,
 	// Any comment is a failure (different run for sure, possibly different method as well)
 	// For any comment representing a different location where failure happened, create a new issue.
 
-	var originalIssue string
+	var firstDetectedFailureLocation string
 
-	// This map contains per each failure the corresponding new jira issue (key) filed
-	newIssues := make(map[string]string)
+	// This map contains per each failure the corresponding new jira issue filed
+	newIssues := make(map[string]*jira.Issue)
 	for _, c := range u.RenderedFields.Comments.Comments {
 		if c.Author.Name == AtomUser { // Consider only comment added by Atom user
-			if tmp, err := GetFunctionName(c, logger); err == nil {
-				if tmp == "" {
+			newComment := &jira.Comment{
+				Body: c.Body,
+			}
+			if failureLocation, err := GetFunctionName(c, logger); err == nil {
+				if failureLocation == "" {
 					// Nothing to do. We were not able to identify in which method issue failed
 					// when this comment was added
 					continue
-				} else if originalIssue == "" || tmp == originalIssue {
+				} else if firstDetectedFailureLocation == "" || failureLocation == firstDetectedFailureLocation {
 					// This comment was added for a different run. But the method were failure happened
 					// matches first failure reported in this issue.
-					originalIssue = tmp
-				} else if v, ok := newIssues[tmp]; ok {
+					firstDetectedFailureLocation = failureLocation
+				} else if v, ok := newIssues[failureLocation]; ok {
 					// This comment was added for a failure that happened in the same test but in a different
 					// method.
 					// We have already seen other comments like this one. So a new jira issue has been already
 					// created. Simply add this comment to the new jira issue and remove it from the issue we
 					// were request to split into multiple.
-					if _, _, err := jiraClient.Issue.AddCommentWithContext(ctx, issue.ID, c); err != nil {
-						logger.Info("Failed to add new comment to issue %s", v)
+					if _, resp, err := jiraClient.Issue.AddCommentWithContext(ctx, v.ID, newComment); err != nil {
+						body, _ := io.ReadAll(resp.Body)
+						logger.Info(fmt.Sprintf("Failed to add new comment to issue %s. Err: %v. Body: %s", v.Key, err, string(body)))
 						continue
 					}
 					// Remove comment from issue
-					if err := jiraClient.Issue.DeleteCommentWithContext(ctx, issue.ID, c.ID); err != nil {
-						logger.Info("Failed to delete comment from issue %s", issue.Key)
+					if err := jiraClient.Issue.DeleteCommentWithContext(ctx, issueToSplit.ID, c.ID); err != nil {
+						logger.Info(fmt.Sprintf("Failed to delete comment from issue %s. Err %v", issueToSplit.Key, err))
 						continue
 					}
 				} else {
-					// This comment is referencing a failure never seen so far. So first create new issue then move comment.
-					if newIssue, err := jira_utils.CreateIssue(ctx, jiraClient, activeSprint, &priority, project.Key, "e2e",
-						issue.Fields.Assignee.Name, "", issue.Fields.Summary, logger); err != nil {
-						logger.Info("Failed to create new issue. Err: %v", err)
+					// This comment is referencing a failure never seen so far. If another existing open issue exists matching
+					// current failure, use such an issue. Otherwise create new issue.
+					// Then move comment.
+					if newIssue, err := useExistingOrCreateNewIssue(ctx, jiraClient, project, activeSprint,
+						issueToSplit.Fields.Assignee.Name, issueToSplit.Fields.Summary, failureLocation, existingFailureMap, logger); err != nil {
+						logger.Info(fmt.Sprintf("Failed to create new issue. Err: %v", err))
 						continue
 					} else {
-						if _, _, err := jiraClient.Issue.AddCommentWithContext(ctx, newIssue.ID, c); err != nil {
-							logger.Info("Failed to add new comment to issue %s", newIssue.ID)
+						newIssues[failureLocation] = newIssue
+						if _, resp, err := jiraClient.Issue.AddCommentWithContext(ctx, newIssue.ID, newComment); err != nil {
+							body, _ := io.ReadAll(resp.Body)
+							logger.Info(fmt.Sprintf("Failed to add new comment to issue %s. Err: %v. Body: %s", newIssue.ID, err, string(body)))
 							continue
 						}
 						// Remove comment from issue
-						if err := jiraClient.Issue.DeleteCommentWithContext(ctx, issue.ID, c.ID); err != nil {
-							logger.Info("Failed to delete comment from issue %s", issue.Key)
+						if err := jiraClient.Issue.DeleteCommentWithContext(ctx, issueToSplit.ID, c.ID); err != nil {
+							logger.Info(fmt.Sprintf("Failed to delete comment from issue %s. Err: %v", issueToSplit.Key, err))
 							continue
 						}
-						newIssues[tmp] = newIssue.Key
 					}
 				}
 			}
@@ -305,8 +348,8 @@ func SplitIssue(ctx context.Context, jiraClient *jira.Client, issue *jira.Issue,
 	}
 
 	result := make([]string, 0)
-	for key := range newIssues {
-		result = append(result, key)
+	for _, value := range newIssues {
+		result = append(result, value.Key)
 	}
 
 	return result, nil
@@ -341,4 +384,103 @@ func Reverse(s []float64) {
 	for i, j := 0, len(s)-1; i < j; i, j = i+1, j-1 {
 		s[i], s[j] = s[j], s[i]
 	}
+}
+
+// buildFailureMap considers all open issues and builds a map: <failure location>: <jira issue>
+// consideri all open issues, excluding:
+// - any issue with multiple failures.
+func buildFailureMap(ctx context.Context, jiraClient *jira.Client, openIssues []jira.Issue,
+	logger logr.Logger) map[string]*jira.Issue {
+	failureMap := make(map[string]*jira.Issue)
+
+	options := &jira.GetQueryOptions{Expand: "renderedFields"}
+
+	// For every open issue filed by Atom user, get comments.
+	for i := range openIssues {
+		u, _, err := jiraClient.Issue.Get(openIssues[i].Key, options)
+		if err != nil {
+			logger.Info(fmt.Sprintf("Failed to query renderedFields for issue %s. Error: %v\n", openIssues[i].Key, err))
+			continue
+		}
+
+		// Walk all comments added by Atom user to this specific issue.
+		// Any comment is a failure (different run for sure, possibly different method as well).
+		// If an issue contains comment(s) representing a single issue, add it to failureMap.
+		// Otherwise an issue with different type of failures is ignored.
+		ignore := false
+		var firstDetectedFailureLocation string
+		for _, c := range u.RenderedFields.Comments.Comments {
+			if c.Author.Name == AtomUser { // Consider only comment added by Atom user
+				if failureLocation, err := GetFunctionName(c, logger); err == nil {
+					if failureLocation == "" {
+						// Nothing to do. We were not able to identify in which method issue failed
+						// when this comment was added
+						continue
+					} else if firstDetectedFailureLocation == "" || failureLocation == firstDetectedFailureLocation {
+						// First issue or a comment added for a different run. But the method were failure happened
+						// matches first failure reported in this issue.
+						firstDetectedFailureLocation = failureLocation
+					} else {
+						// This issue contains multiple different failires. Ignore it
+						ignore = true
+					}
+				}
+			}
+		}
+		if !ignore && firstDetectedFailureLocation != "" {
+			failureMap[firstDetectedFailureLocation] = &openIssues[i]
+		}
+	}
+
+	return failureMap
+}
+
+// Looking at already existing issues, if one exists matching current failure, use such issue.
+// If no existing issue is found matching current failure, create a new one.
+func useExistingOrCreateNewIssue(ctx context.Context, jiraClient *jira.Client,
+	project *jira.Project, activeSprint *jira.Sprint,
+	assignee, summary, failureLocation string,
+	existingFailureMap map[string]*jira.Issue,
+	logger logr.Logger) (*jira.Issue, error) {
+	// Look at existing open failures.If one matches failureLocation, use that jira Issue
+	for k, v := range existingFailureMap {
+		if failureLocation == k {
+			return v, nil
+		}
+	}
+
+	// No existing open issue matches current failure Location. Create new issue,.
+	priority := jira.Priority{Name: "P1"}
+
+	// This comment is referencing a failure never seen so far. So first create new issue then move comment.
+	newIssue, err := jira_utils.CreateIssue(ctx, jiraClient, activeSprint, &priority, project.Key, "e2e",
+		assignee, "", summary, logger)
+	if err != nil {
+		logger.Info(fmt.Sprintf("Failed to create new issue. Err: %v", err))
+		return nil, err
+	}
+
+	return newIssue, nil
+}
+
+func getJiraProjectAndActiveSprint(ctx context.Context, jiraClient *jira.Client, logger logr.Logger) (*jira.Project, *jira.Sprint, error) {
+	project, err := jira_utils.GetJiraProject(ctx, jiraClient, "", logger)
+	if err != nil || project == nil {
+		logger.Info(fmt.Sprintf("Failed to get jira project. Err: %v", err))
+		return nil, nil, err
+	}
+
+	board, err := jira_utils.GetJiraBoard(ctx, jiraClient, project.Key, LCSBoardName, logger)
+	if err != nil || board == nil {
+		logger.Info(fmt.Sprintf("Failed to get jira board. Err %v", err))
+		return nil, nil, err
+	}
+
+	activeSprint, err := jira_utils.GetJiraActiveSprint(ctx, jiraClient, fmt.Sprintf("%d", board.ID), logger)
+	if err != nil || activeSprint == nil {
+		logger.Info(fmt.Sprintf("Failed to get active sprint. Err: %v", err))
+		return nil, nil, err
+	}
+
+	return project, activeSprint, nil
 }
