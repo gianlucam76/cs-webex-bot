@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"reflect"
@@ -322,19 +323,18 @@ func GetFunctionName(c *jira.Comment, logger logr.Logger) (string, error) {
 	}
 
 	const fullStackTraceText string = "Full Stack Trace "
-	fullStackTraceIndex := strings.Index(c.Body, fullStackTraceText)
-	if fullStackTraceIndex == -1 {
-		logger.Info("full strack trace not present")
-		return "", fmt.Errorf("full strack trace not present")
+	scanner := bufio.NewScanner(strings.NewReader(c.Body))
+	for scanner.Scan() {
+		text := scanner.Text()
+		if strings.Contains(text, fullStackTraceText) {
+			addressIndex := strings.Index(text, "0x")
+			if addressIndex != -1 {
+				return text[:addressIndex], nil
+			}
+			return text, nil
+		}
 	}
-	begin := fullStackTraceIndex + len(fullStackTraceText)
-	spaceIndex := strings.Index(c.Body[begin:], "0x")
-	if spaceIndex == -1 {
-		logger.Info("full strack trace is malformed")
-		return "", fmt.Errorf("full strack trace is malformed")
-	}
-	end := begin + spaceIndex
-	return strings.TrimSuffix(c.Body[begin:end], "."), nil
+	return "", nil
 }
 
 func Reverse(s []float64) {

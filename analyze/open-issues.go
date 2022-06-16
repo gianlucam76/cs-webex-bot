@@ -11,6 +11,7 @@ import (
 	webexteams "github.com/jbogarin/go-cisco-webex-teams/sdk"
 
 	jira_utils "github.com/gianlucam76/jira_utils/jira"
+	"github.com/gianlucam76/webex_bot/utils"
 	"github.com/gianlucam76/webex_bot/webex_utils"
 )
 
@@ -53,15 +54,29 @@ func sendOpenIssue(ctx context.Context, webexClient *webexteams.Client, roomID s
 
 	textMessage := "Hello cloudstack team here is the list of current open issues:  \n"
 	for i := range issues {
+		options := &jira.GetQueryOptions{Expand: "renderedFields"}
+		u, _, err := jiraClient.Issue.Get(issues[i].Key, options)
+		times := 0
+		if err != nil {
+			logger.Info(fmt.Sprintf("Failed to query renderedFields. Error: %v\n", err))
+		} else {
+			for _, c := range u.RenderedFields.Comments.Comments {
+				if c.Author.Name == utils.AtomUser {
+					times++
+				}
+			}
+		}
 		createdTime := time.Time(issues[i].Fields.Created)
 		diff := time.Since(createdTime)
 		lastUpdate := fmt.Sprintf("%d days", int(diff.Hours()/24))
 		assignee := issues[i].Fields.Assignee.Name
-		textMessage += fmt.Sprintf("[%s](https://jira-eng-sjc10.cisco.com/jira/browse/%s). Issue opened %s ago. Assignee <@personEmail:%s@cisco.com|%s>  \n",
-			issues[i].Key, issues[i].Key, lastUpdate, assignee, assignee)
+		textMessage += fmt.Sprintf("[%s](https://jira-eng-sjc10.cisco.com/jira/browse/%s). Issue opened %s ago. Assignee <@personEmail:%s@cisco.com|%s>  (issue seen %d times since filed)\n",
+			issues[i].Key, issues[i].Key, lastUpdate, assignee, assignee, times)
 	}
 
-	if err = webex_utils.SendMessage(webexClient, roomID, textMessage, logger); err != nil {
-		logger.Info(fmt.Sprintf("Failed to send message. Err: %v", err))
+	if len(issues) > 0 {
+		if err = webex_utils.SendMessage(webexClient, roomID, textMessage, logger); err != nil {
+			logger.Info(fmt.Sprintf("Failed to send message. Err: %v", err))
+		}
 	}
 }
