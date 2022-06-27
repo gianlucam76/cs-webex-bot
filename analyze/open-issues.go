@@ -21,9 +21,9 @@ func OpenIssues(ctx context.Context,
 	webexClient *webexteams.Client, roomID string,
 	jiraClient *jira.Client,
 	logger logr.Logger) {
-	_ = gocron.Every(1).Thursday().At("11:30:00").Do(sendOpenIssue,
+	_ = gocron.Every(1).Thursday().At("13:30:00").Do(sendOpenIssue,
 		ctx, webexClient, roomID, jiraClient, logger)
-	_ = gocron.Every(1).Sunday().At("11:30:00").Do(sendOpenIssue,
+	_ = gocron.Every(1).Sunday().At("13:30:00").Do(sendOpenIssue,
 		ctx, webexClient, roomID, jiraClient, logger)
 }
 

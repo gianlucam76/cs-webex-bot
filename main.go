@@ -4,11 +4,9 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"image/color"
 	"image/png"
 	"os"
 	"reflect"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -23,10 +21,6 @@ import (
 	"github.com/johnfercher/maroto/pkg/props"
 	gim "github.com/ozankasikci/go-image-merge"
 	"github.com/spf13/pflag"
-	"gonum.org/v1/plot"
-	"gonum.org/v1/plot/plotter"
-	"gonum.org/v1/plot/plotutil"
-	"gonum.org/v1/plot/vg"
 	"k8s.io/klog/v2"
 	"k8s.io/klog/v2/klogr"
 
@@ -47,8 +41,8 @@ const (
 	ucsLink             = "https://cs-aci-jenkins.cisco.com:8443/job/Production/job/Cloudstack/job/Cloudstack-UCS-Sanity/"
 	pieChartText        = "charts"
 	reportText          = "reports"
+	usageText           = "usage"
 	summaryText         = "summary"
-	splitIssueText      = "split"
 )
 
 var pollInterval time.Duration
@@ -143,10 +137,10 @@ func main() {
 					handlePieChartRequest(ctx, webexClient, room.ID, from, logger)
 				} else if strings.Contains(m.Text, reportText) {
 					handleReportRequest(ctx, webexClient, room.ID, from, logger)
+				} else if strings.Contains(m.Text, usageText) {
+					handleUsageReportRequest(ctx, webexClient, room.ID, from, m.Text, logger)
 				} else if strings.Contains(m.Text, summaryText) {
 					handleSummaryRequest(ctx, webexClient, room.ID, from, logger)
-				} else if strings.Contains(m.Text, splitIssueText) {
-					handleSplitIssueRequest(ctx, webexClient, room.ID, from, m.Text, jiraClient, logger)
 				} else if testName, isMatch, err := doesMatchTest(ctx, webexClient, room.ID, from, m.Text, logger); err == nil {
 					if isMatch {
 						sendMessageWithTestResult(ctx, webexClient, room.ID, from, testName, logger)
@@ -313,7 +307,7 @@ func handleUcsResultRequest(ctx context.Context, webexClient *webexteams.Client,
 		for _, item := range results.Each(reflect.TypeOf(rtyp)) {
 			failedTests = true
 			r := item.(es_utils.Result)
-			textMessage += fmt.Sprintf("Test %s failed in ucs run [%d](%s/%d) 💔  \n",
+			textMessage += fmt.Sprintf("Test %s failed in ucs run [%d](%s/%d) ❌  \n",
 				r.Name, lastRun, ucsLink, lastRun)
 		}
 		if !failedTests {
@@ -334,7 +328,7 @@ func handlePieChartRequest(ctx context.Context, webexClient *webexteams.Client,
 	if fileName, err := analyze.CreateDurationPieChart(ctx, true, roomID, logger); err == nil {
 		textMessage := fmt.Sprintf("Hello 🤚 <@personEmail:%s|%s> thanks for your question.  \n",
 			from, from)
-		textMessage += "please open the attached file to see test duration pie chart from last VCS run  \n"
+		textMessage += "the attached file contains test duration pie chart from last VCS run  \n"
 		if err := webex_utils.SendMessageWithGraphs(webexClient, roomID, textMessage, []string{fileName}, logger); err != nil {
 			logger.Info(fmt.Sprintf("Failed to send message. Err: %v", err))
 		}
@@ -343,7 +337,7 @@ func handlePieChartRequest(ctx context.Context, webexClient *webexteams.Client,
 	if fileName, err := analyze.CreateDurationPieChart(ctx, false, roomID, logger); err == nil {
 		textMessage := fmt.Sprintf("Hello 🤚 <@personEmail:%s|%s> thanks for your question.  \n",
 			from, from)
-		textMessage += "please open the attached file to see test duration pie chart from last UCS run  \n"
+		textMessage += "the attached file contains test duration pie chart from last UCS run  \n"
 		if err := webex_utils.SendMessageWithGraphs(webexClient, roomID, textMessage, []string{fileName}, logger); err != nil {
 			logger.Info(fmt.Sprintf("Failed to send message. Err: %v", err))
 		}
@@ -393,61 +387,67 @@ func handleReportRequest(ctx context.Context, webexClient *webexteams.Client,
 	}
 }
 
-func handleSplitIssueRequest(ctx context.Context, webexClient *webexteams.Client,
-	roomID, from, text string, jiraClient *jira.Client, logger logr.Logger) {
-	logger.Info("Handling split request")
+func handleUsageReportRequest(ctx context.Context, webexClient *webexteams.Client,
+	roomID, from, message string, logger logr.Logger) {
+	logger.Info("Handling usage report request")
 
-	index := strings.Index(text, splitIssueText)
-	if index == -1 {
-		logger.Info(fmt.Sprintf("Failed to find %s in `%s`", splitIssueText, text))
-	}
-
-	openIssues, err := utils.GetOpenIssues(ctx, jiraClient, logger)
-	if err != nil {
-		return
-	}
-
-	re := regexp.MustCompile("[0-9]+")
-	submatchall := re.FindAllString(text[index:], -1)
-
-	if len(submatchall) == 0 || len(submatchall) > 1 {
-		msg := fmt.Sprintf("I am able to split only one issue at time. Found %d in `%s`",
-			len(submatchall), text)
-		logger.Info(msg)
-		if err := webex_utils.SendMessage(webexClient, roomID, msg, logger); err != nil {
+	// Format of this request: <something> usage <namespace>
+	index := strings.Index(message, usageText)
+	var namespace string
+	if _, err := fmt.Sscanf(message[index+len(usageText):], "%s", &namespace); err != nil {
+		if err := webex_utils.SendMessage(webexClient, roomID,
+			fmt.Sprintf("Format is %s namespace-name (namespace-name is the namespace of the pods you are interested in)",
+				usageText), logger); err != nil {
 			logger.Info(fmt.Sprintf("Failed to send message. Err: %v", err))
 		}
 		return
 	}
 
-	found := false
-	var webexMessage string
-	element := submatchall[0]
+	files, err := getUsageReportFiles(ctx, namespace, logger)
+	if err != nil {
+		return
+	}
 
-	for i := range openIssues {
-		issue := &openIssues[i]
-		if strings.Contains(issue.Key, element) { // issue.Key CLOUDSTACK-3509 element is just 3509
-			found = true
-			if result, err := utils.SplitIssue(ctx, jiraClient, issue, logger); err != nil {
-				webexMessage = fmt.Sprintf("Failed to split issue %s. Error %v", issue.Key, err)
-			} else if len(result) > 0 {
-				webexMessage = "Created new issues:  \n"
-				for i := range result {
-					webexMessage += fmt.Sprintf("[%s](https://jira-eng-sjc10.cisco.com/jira/browse/%s)", result[i], result[i])
-				}
-			} else {
-				webexMessage = fmt.Sprintf("Did not find any way to split issue [%s](https://jira-eng-sjc10.cisco.com/jira/browse/CLOUDSTACK-%s)",
-					element, element)
-			}
-			break
+	if len(files) == 0 {
+		if err := webex_utils.SendMessage(webexClient, roomID,
+			fmt.Sprintf("No usage records found for pods in namespace %s", namespace), logger); err != nil {
+			logger.Info(fmt.Sprintf("Failed to send message. Err: %v", err))
 		}
+		return
 	}
 
-	if !found {
-		webexMessage = fmt.Sprintf("did not find any open issue matching the request %s", text)
+	sort.Strings(files)
+
+	grids := make([]*gim.Grid, 0)
+	for i := range files {
+		tmpGrid := gim.Grid{ImageFilePath: files[i]}
+		grids = append(grids, &tmpGrid)
+	}
+	x, y := analyze.GetGridSize(len(files))
+	rgba, err := gim.New(grids, x, y).Merge()
+	if err != nil {
+		logger.Info(fmt.Sprintf("Failed to create grid. Error %v", err))
+		return
 	}
 
-	if err := webex_utils.SendMessage(webexClient, roomID, webexMessage, logger); err != nil {
+	gridFileName := "/tmp/report_grid.png"
+	file, err := os.Create(gridFileName)
+	if err != nil {
+		logger.Info(fmt.Sprintf("Failed to create grid file. Error %v", err))
+		return
+	}
+
+	if err = png.Encode(file, rgba); err != nil {
+		logger.Info(fmt.Sprintf("Failed to encode grid file. Error %v", err))
+		return
+	}
+
+	textMessage := fmt.Sprintf("Hello 🤚 <@personEmail:%s|%s> thanks for your question.  \n",
+		from, from)
+	textMessage += fmt.Sprintf("Please find attached the cloudstack e2e memory usage plots for pod in namespace %s", namespace)
+
+	if err := webex_utils.SendMessageWithGraphs(webexClient, roomID, textMessage,
+		[]string{gridFileName}, logger); err != nil {
 		logger.Info(fmt.Sprintf("Failed to send message. Err: %v", err))
 	}
 }
@@ -702,56 +702,6 @@ func initFlags(fs *pflag.FlagSet) {
 	)
 }
 
-func createDurationPlot(environment, testName string, data []float64, logger logr.Logger) string {
-	logger.Info(fmt.Sprintf("Generate duration plot for %s (env %s)", testName, environment))
-
-	min := data[0]
-	max := data[0]
-	pts := make(plotter.XYs, len(data))
-	for i := range data {
-		pts[i].X = float64(i)
-		pts[i].Y = data[i]
-		if max < data[i] {
-			max = data[i]
-		}
-		if min > data[i] {
-			min = data[i]
-		}
-	}
-
-	p := plot.New()
-
-	p.Title.Text = testName
-	p.X.Label.Text = "Runs (index is not used)"
-	p.Y.Label.Text = "Time in minute"
-
-	p.Y.Max = max + 5
-	p.Y.Min = min - 5
-	p.X.Max = float64(len(data) + 5)
-
-	err := plotutil.AddLinePoints(p,
-		fmt.Sprintf("Test duration (env %s)", environment), pts)
-
-	mean, _ := stat.MeanStdDev(data, nil)
-
-	meanPlot := plotter.NewFunction(func(x float64) float64 { return mean })
-	meanPlot.Color = color.RGBA{B: 255, A: 255}
-	p.Add(meanPlot)
-	p.Legend.Add("Mean", meanPlot)
-
-	if err != nil {
-		panic(err)
-	}
-
-	fileName := fmt.Sprintf("/tmp/duration_%s_%s.png", environment, testName)
-	// Save the plot to a PNG file.
-	if err := p.Save(4*vg.Inch, 4*vg.Inch, fileName); err != nil {
-		panic(err)
-	}
-
-	return fileName
-}
-
 func startCron() {
 	<-gocron.Start()
 }
@@ -783,7 +733,6 @@ func getReportFiles(ctx context.Context, logger logr.Logger) ([]string, error) {
 			false,         // no vcs
 			true,          // only ucs
 			100)           // consider the last 100 runs. We have an average of 3 runs per week. Setting this higher.
-		// Runs older than two weeks will be discarded later on.
 
 		if err != nil {
 			logger.Info(fmt.Sprintf("Failed to get data for report %q. Error %v", reportTypes[i], err))
@@ -798,7 +747,7 @@ func getReportFiles(ctx context.Context, logger logr.Logger) ([]string, error) {
 			// Discard runs older than a week
 			lastValidTime := time.Now().Add(-14 * 24 * time.Hour)
 			if r.CreatedTime.After(lastValidTime) {
-				data = append(data, r.DurationInMinutes)
+				data = append(data, float64(r.DurationInMinutes))
 			}
 		}
 
@@ -806,7 +755,76 @@ func getReportFiles(ctx context.Context, logger logr.Logger) ([]string, error) {
 			// Results are returned with last one first.
 			// Reverse the order while creating a plot
 			utils.Reverse(data)
-			ucsPlot := createDurationPlot("ucs", reportTypes[i], data, logger)
+			environment := "ucs"
+			mean, _ := stat.MeanStdDev(data, nil)
+			ucsPlot := analyze.CreateDurationPlot(&environment, &reportTypes[i], data, mean, logger)
+			files = append(files, ucsPlot)
+		}
+	}
+
+	return files, nil
+}
+
+func getUsageReportFiles(ctx context.Context, namespace string, logger logr.Logger) ([]string, error) {
+	logger.Info(fmt.Sprintf("Collect usage report for pods in namespace: %s", namespace))
+	files := make([]string, 0)
+
+	reportTypes, err := utils.BuildUCSUsageReports(ctx, logger)
+	if err != nil {
+		logger.Info(fmt.Sprintf("Failed to get reports. Err: %v", err))
+		return nil, err
+	}
+
+	for i := range reportTypes {
+		podName := reportTypes[i]
+		podInfo := strings.Split(podName, ":")
+		if len(podInfo) == 0 {
+			logger.Info(fmt.Sprintf("Unexpected pod name %s", podName))
+			continue
+		}
+		podNamespace := podInfo[0]
+
+		// Only collect for pod in the specified namespace
+		if podNamespace != namespace {
+			continue
+		}
+
+		ucsReports, err := es_utils.GetUsageReports(ctx, logger,
+			"",      // no specific run
+			podName, // for this specific pod
+			false,   // no vcs
+			true,    // only ucs
+			100)     // consider the last 100 runs. We have an average of 3 runs per week. Setting this higher.
+		// Runs older than two weeks will be discarded later on.
+
+		if err != nil {
+			logger.Info(fmt.Sprintf("Failed to get usage report for pod %q. Error %v", podName, err))
+			return nil, err
+		}
+
+		var rtyp es_utils.UsageReport
+		data := make([]float64, 0)
+		var memoryLimit int64
+		for _, item := range ucsReports.Each(reflect.TypeOf(rtyp)) {
+			r := item.(es_utils.UsageReport)
+
+			if memoryLimit == 0 {
+				memoryLimit = r.MemoryLimit
+			}
+			// Discard runs older than a week
+			lastValidTime := time.Now().Add(-14 * 24 * time.Hour)
+			if r.CreatedTime.After(lastValidTime) {
+				data = append(data, float64(r.Memory))
+			}
+		}
+
+		if len(data) > 0 {
+			// Results are returned with last one first.
+			// Reverse the order while creating a plot
+			utils.Reverse(data)
+			environment := "ucs"
+			mean, _ := stat.MeanStdDev(data, nil)
+			ucsPlot := analyze.CreateMemoryPlot(&environment, &reportTypes[i], data, mean, float64(memoryLimit), logger)
 			files = append(files, ucsPlot)
 		}
 	}
@@ -871,14 +889,18 @@ func getTestFiles(ctx context.Context, testName string, logger logr.Logger) ([]s
 		// Results are returned with last one first.
 		// Reverse the order while creating a plot
 		utils.Reverse(ucsData)
-		ucsPlot := createDurationPlot("ucs", testName, ucsData, logger)
+		environment := "ucs"
+		mean, _ := stat.MeanStdDev(ucsData, nil)
+		ucsPlot := analyze.CreateDurationPlot(&environment, &testName, ucsData, mean, logger)
 		files = append(files, ucsPlot)
 	}
 	if len(vcsData) > 0 {
 		// Results are returned with last one first.
 		// Reverse the order while creating a plot
 		utils.Reverse(vcsData)
-		vcsPlot := createDurationPlot("vcs", testName, vcsData, logger)
+		environment := "vcs"
+		mean, _ := stat.MeanStdDev(vcsData, nil)
+		vcsPlot := analyze.CreateDurationPlot(&environment, &testName, vcsData, mean, logger)
 		files = append(files, vcsPlot)
 	}
 

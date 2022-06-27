@@ -52,7 +52,6 @@ func AnalyzeOpenIssues(ctx context.Context,
 	webexClient *webexteams.Client, roomID string,
 	jiraClient *jira.Client, logger logr.Logger) {
 	_ = gocron.Every(1).Day().At("23:30:00").Do(fromResolvedIssues, ctx, jiraClient, logger)
-	_ = gocron.Every(1).Day().At("8:00:00").Do(splitOpenIssues, ctx, webexClient, roomID, jiraClient, logger)
 	_ = gocron.Every(1).Day().At("8:30:00").Do(reassignOpenIssues, ctx, webexClient, roomID, jiraClient, logger)
 	_ = gocron.Every(1).Day().At("18:30:00").Do(reassignOpenIssues, ctx, webexClient, roomID, jiraClient, logger)
 }
@@ -97,16 +96,16 @@ func fromResolvedIssues(ctx context.Context, jiraClient *jira.Client, logger log
 
 		// Comments are returned first to last in order of time.
 		// Created is not a time but a string, so cannot really be used as time.
-		var fullStackTrace string
+		var failureLocation string
 		for _, c := range u.RenderedFields.Comments.Comments {
 			if c.Author.Name == utils.AtomUser {
 				if tmp, err := utils.GetFunctionName(c, logger); err == nil {
-					fullStackTrace = tmp
+					failureLocation = tmp
 				}
 			}
 		}
-		if fullStackTrace != "" {
-			resolvedIssueOwners[fullStackTrace] = fmt.Sprintf("%s:%s", issue.Fields.Assignee.Name, issue.Key)
+		if failureLocation != "" {
+			resolvedIssueOwners[failureLocation] = fmt.Sprintf("%s:%s", issue.Fields.Assignee.Name, issue.Key)
 		}
 	}
 }
@@ -195,65 +194,6 @@ func reassignOpenIssues(ctx context.Context, webexClient *webexteams.Client, roo
 						logger.Info(fmt.Sprintf("Failed to send message. Err: %v", err))
 					}
 				}
-			}
-		}
-	}
-}
-
-// splitOpenIssues considers all open issues file by atomUser during e2e tagging sanities.
-// issues filed by atomUser during e2e tagging sanities are per test. If a given test fails due
-// to different reasons (for instance SynchronizedBeforeSuite might fail due to different reasons)
-// only a new comment to same issue is added.
-// This method looks at open issue and if different failures are found, a new bug is filed.
-func splitOpenIssues(ctx context.Context, webexClient *webexteams.Client, roomID string,
-	jiraClient *jira.Client, logger logr.Logger) {
-	project, err := jira_utils.GetJiraProject(ctx, jiraClient, "", logger)
-	if err != nil || project == nil {
-		logger.Info(fmt.Sprintf("Failed to get jira project. Err: %v", err))
-		return
-	}
-
-	// Fetch open issues
-	jql := fmt.Sprintf("Status NOT IN (Resolved,Closed) and reporter = atom-ci.gen and project = %s",
-		project.Name)
-
-	openIssues, _, err := jiraClient.Issue.SearchWithContext(ctx, jql, nil)
-	if err != nil {
-		logger.Info(fmt.Sprintf("Failed to get open issues. Error: %v", err))
-		return
-	}
-
-	for i := range openIssues {
-		issue := openIssues[i]
-		options := &jira.GetQueryOptions{Expand: "renderedFields"}
-		u, _, err := jiraClient.Issue.Get(issue.Key, options)
-
-		if err != nil {
-			logger.Info(fmt.Sprintf("Failed to query renderedFields. Error: %v\n", err))
-			continue
-		}
-
-		logger.Info(fmt.Sprintf("Considering issue %s", issue.Key))
-		fullStackTraces := make(map[string]bool)
-		for _, c := range u.RenderedFields.Comments.Comments {
-			if c.Author.Name == utils.AtomUser {
-				if tmp, err := utils.GetFunctionName(c, logger); err == nil {
-					fullStackTraces[tmp] = true
-				}
-			}
-		}
-
-		if len(fullStackTraces) > 1 {
-			msg := fmt.Sprintf("[%s](https://jira-eng-sjc10.cisco.com/jira/browse/%s) contains different failures  \n",
-				issue.Key, issue.Key)
-			for k := range fullStackTraces {
-				msg += fmt.Sprintf("%s  \n", k)
-			}
-			msg += "  \nPlease considering splitting this issue into multiple ones so we can debug all."
-			msg += fmt.Sprintf("If you prefer me to do it, please ask me to (\"split %s\")", issue.Key)
-			logger.Info(msg)
-			if err = webex_utils.SendMessage(webexClient, roomID, msg, logger); err != nil {
-				logger.Info(fmt.Sprintf("Failed to send message. Err: %v", err))
 			}
 		}
 	}
