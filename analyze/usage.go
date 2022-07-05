@@ -54,12 +54,10 @@ func evaluateUCSUsageReports(ctx context.Context,
 		return
 	}
 
-	reportFiles := make([]string, 0)
+	var reportFiles []string
 
 	// Analyze per pod, memory and cpu variance.
-	files := analyzeUsageVariance(ctx, usageReports, logger)
-	reportFiles = append(reportFiles, files...)
-
+	reportFiles = analyzeUsageVariance(ctx, usageReports, logger)
 	if len(reportFiles) > 0 {
 		textMessage := "Hello I detected something which I believe needs to be looked at.  \n"
 		textMessage += "For the reports in the plot the relative standard deviation is too big.  \n"
@@ -78,7 +76,7 @@ func evaluateUCSUsageReports(ctx context.Context,
 	reportFiles = analyzeMemoryUsageWithNoLimit(ctx, usageReports, logger)
 	if len(reportFiles) > 0 {
 		textMessage := "Hello I detected something which I believe needs to be looked at.  \n"
-		textMessage += "For the reports in the plot, the max memory usage is too high and no memory limit. Please consider definiing requets and limits.  \n"
+		textMessage += "For the reports in the plot, the max memory usage is too high and no memory limit is defined. Please consider adding requets and limits.  \n"
 		sendAlertForReport(webexClient, roomID, textMessage, reportFiles, logger)
 	}
 }

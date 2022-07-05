@@ -47,12 +47,14 @@ var card = `{
             "columns": [
                 {
                     "type": "Column",
-                    "width": 35,
+                    "width": 30,
                     "items": [
                         {
                             "type": "TextBlock",
                             "text": "Issues:",
-                            "color": "Light"
+                            "weight": "Lighter",
+                            "color": "Light",
+                            "spacing": "Small"
                         },
                         {
                             "type": "TextBlock",
@@ -88,17 +90,27 @@ var card = `{
                             "weight": "Lighter",
                             "color": "Light",
                             "spacing": "Small"
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": "Usage:",
+                            "weight": "Lighter",
+                            "color": "Light",
+                            "spacing": "padding"
                         }
                     ]
                 },
                 {
                     "type": "Column",
-                    "width": 105,
+                    "style": "default",
+                    "width": 115,
+                    "minHeight": "50px",
                     "items": [
                         {
                             "type": "TextBlock",
                             "text": "\"issues\" to list current bugs",
                             "color": "Light",
+                            "weight": "Lighter",
                             "spacing": "Small"
                         },
                         {
@@ -117,7 +129,7 @@ var card = `{
                         },
 						{
                             "type": "TextBlock",
-                            "text": "test name to list specific test results",
+                            "text": "<test name> to list specific test results",
                             "weight": "Lighter",
                             "color": "Light",
                             "spacing": "Small"
@@ -135,6 +147,14 @@ var card = `{
                             "weight": "Lighter",
                             "color": "Light",
                             "spacing": "Small"
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": "\"usage <namespace>\" to send memory and cpu usage reports for pods in the namespace",
+                            "weight": "Lighter",
+                            "color": "Light",
+                            "spacing": "Small",
+                            "wrap": true
                         }
                     ]
                 }
