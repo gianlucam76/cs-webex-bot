@@ -19,6 +19,14 @@ import (
 // defined send a warning.
 const maxMemory = 500000
 
+// When relative standard deviation is higher than this value
+// an action is taken
+const memoryRsdThreshold float64 = 40
+
+// When relative standard deviation is higher than this value
+// an action is taken
+const cpuRsdThreshold float64 = 40
+
 // CheckReportUsageOnUCS for each reports in UCS:
 // - consider the runs in the last week;
 // - if relative standard deviation is higher than rsdThreshold
@@ -65,11 +73,53 @@ func evaluateUCSUsageReports(ctx context.Context,
 		textMessage += "For the reports in the plot, the max memory usage is too close to memory limit. Please consider increasing limit.  \n"
 		sendAlertForReport(webexClient, roomID, textMessage, reportFiles, logger)
 	}
+
+	// Analyze per pod memory usage compared to memory limit.
+	reportFiles = analyzeMemoryUsageWithNoLimit(ctx, usageReports, logger)
+	if len(reportFiles) > 0 {
+		textMessage := "Hello I detected something which I believe needs to be looked at.  \n"
+		textMessage += "For the reports in the plot, the max memory usage is too high and no memory limit. Please consider definiing requets and limits.  \n"
+		sendAlertForReport(webexClient, roomID, textMessage, reportFiles, logger)
+	}
 }
 
 // analyzeMemoryUsage considers all pods for which memory usage was collected.
 // If pod memory usage is too close to limit, generate a plot with collected samples.
 func analyzeMemoryUsage(ctx context.Context, reports []string, logger logr.Logger) []string {
+	reportFiles := make([]string, 0)
+
+	for i := range reports {
+		podName := &reports[i]
+		// Get reports for a given pod
+		data, err := getUsageReportData(ctx, *podName, logger)
+		if err != nil {
+			continue
+		}
+
+		if len(data) < numberOfAvailableRuns {
+			logger.Info(fmt.Sprintf("Not enough available runs for pod %q", reports[i]))
+			continue
+		}
+
+		memorySamples := getMemorySamples(data)
+		_, max := minMax(memorySamples)
+
+		// data[0] is from last available run, so always use it.
+		if data[0].MemoryLimit != 0 && max >= 0.9*float64(data[0].MemoryLimit) {
+			logger.Info(fmt.Sprintf("Max memory consumption (%f) is too close to memory limit (%d)", max, data[0].MemoryLimit))
+			mean, _ := stat.MeanStdDev(memorySamples, nil)
+			environment := "ucs"
+			fileName := CreateMemoryPlot(&environment, podName, memorySamples, mean, float64(data[0].MemoryLimit), logger)
+			reportFiles = append(reportFiles, fileName)
+		}
+	}
+
+	return reportFiles
+}
+
+// analyzeMemoryUsageWithNoLimit considers all pods for which memory usage was collected.
+// If pod memory usage is too high and no limit is defined, generate a plot with collected samples.
+func analyzeMemoryUsageWithNoLimit(ctx context.Context, reports []string, logger logr.Logger) []string {
 	reportFiles := make([]string, 0)
 
 	for i := range reports {
@@ -102,14 +152,6 @@ func analyzeMemoryUsage(ctx context.Context, reports []string, logger logr.Logge
 			}
 			continue
 		}
-
-		if max >= 0.9*float64(data[0].MemoryLimit) {
-			logger.Info(fmt.Sprintf("Max memory consumption (%f) is too close to memory limit (%d)", max, data[0].MemoryLimit))
-			mean, _ := stat.MeanStdDev(memorySamples, nil)
-			environment := "ucs"
-			fileName := CreateMemoryPlot(&environment, podName, memorySamples, mean, float64(data[0].MemoryLimit), logger)
-			reportFiles = append(reportFiles, fileName)
-		}
 	}
 
 	return reportFiles
@@ -131,11 +173,11 @@ func analyzeUsageVariance(ctx context.Context, reports []string, logger logr.Log
 			continue
 		}
 
-		if fileName := analyzeMemoryVariance(reportFiles[i], data, logger); fileName != "" {
+		if fileName := analyzeMemoryVariance(reports[i], data, logger); fileName != "" {
 			reportFiles = append(reportFiles, fileName)
 		}
 
-		if fileName := analyzeCPUVariance(reportFiles[i], data, logger); fileName != "" {
+		if fileName := analyzeCPUVariance(reports[i], data, logger); fileName != "" {
 			reportFiles = append(reportFiles, fileName)
 		}
 	}
@@ -206,7 +248,7 @@ func analyzeMemoryVariance(pod string, data []es_utils.UsageReport, logger logr.
 	logger.Info(fmt.Sprintf("Usage Report for pod: %s Mean: %f Standard Deviation: %f Relative Standard Deviation: %f",
 		pod, mean, std, rsd))
 
-	if rsd >= rsdThreshold {
+	if rsd >= memoryRsdThreshold {
 		environment := "ucs"
 		fileName := CreateMemoryPlot(&environment, &pod, memorySamples, mean, float64(data[0].MemoryLimit), logger)
 		return fileName
@@ -219,7 +261,7 @@ func analyzeCPUVariance(pod string, data []es_utils.UsageReport, logger logr.Log
 	cpuSamples := getCPUSamples(data)
 	mean, std := stat.MeanStdDev(cpuSamples, nil)
 
-	if mean <= 1 {
+	if mean <= 10 {
 		logger.Info(fmt.Sprintf("Usage Report for pod: %s Mean: %f is too low. Skip analyzing rsd", pod, mean))
 		return ""
 	}
@@ -228,7 +270,7 @@ func analyzeCPUVariance(pod string, data []es_utils.UsageReport, logger logr.Log
 	logger.Info(fmt.Sprintf("Usage Report for pod: %s Mean: %f Standard Deviation: %f Relative Standard Deviation: %f",
 		pod, mean, std, rsd))
 
-	if rsd >= rsdThreshold {
+	if rsd >= cpuRsdThreshold {
 		fileName := createCPUPlot(&pod, cpuSamples, mean, float64(data[0].CPULimit), logger)
 		return fileName
 	}
