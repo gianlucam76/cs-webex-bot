@@ -190,7 +190,6 @@ func CreateDurationPieChart(ctx context.Context, vcs bool,
 	var discardedTotalTime float64 = 0
 	for _, item := range results.Each(reflect.TypeOf(rtyp)) {
 		r := item.(es_utils.Result)
-
 		if r.Name == exclude_test {
 			continue
 		}
@@ -199,7 +198,6 @@ func CreateDurationPieChart(ctx context.Context, vcs bool,
 			discardedTotalTime += r.DurationInMinutes
 			continue
 		}
-
 		name := r.Name
 		if r.Serial {
 			name = fmt.Sprintf("%s*", r.Name)
