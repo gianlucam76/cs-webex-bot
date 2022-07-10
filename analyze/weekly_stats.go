@@ -54,7 +54,7 @@ func sendStatsPerEnvironment(ctx context.Context,
 	// failedTestMap contains, per test number of times test passed
 	passedTestMap := make(map[string]int)
 
-	numberOfRuns := collectStats(ctx, ucs, failedTestMap, passedTestMap, logger)
+	numberOfRuns, numberOfFailedRuns := collectStats(ctx, ucs, failedTestMap, passedTestMap, logger)
 	if ucs {
 		env = "ucs"
 	} else {
@@ -63,8 +63,11 @@ func sendStatsPerEnvironment(ctx context.Context,
 
 	var textMessage string
 	if len(failedTestMap) != 0 {
-		textMessage = fmt.Sprintf("Hello 🤚 This is a weekly report for top failed tests in the last %d %s runs  \n",
+		textMessage = fmt.Sprintf("Hello 🤚 This is a weekly report for the last %d %s runs  \n",
 			numberOfRuns, env)
+		textMessage += fmt.Sprintf("**Number of failed %s e2e runs: %d . Number of successfull %s e2e runs: %d**  \n",
+			env, numberOfFailedRuns, env, numberOfRuns-numberOfFailedRuns)
+		textMessage += "Here are the top 3 tests that failed the most:  \n"
 		h := getHeap(failedTestMap)
 		for i := 1; i <= 3; i++ {
 			test := heap.Pop(h).(kv)
@@ -72,7 +75,7 @@ func sendStatsPerEnvironment(ctx context.Context,
 				break
 			}
 			passed := passedTestMap[test.Key]
-			textMessage += fmt.Sprintf("1. test: %s failed **%d** times.  (passed %d times)  \n",
+			textMessage += fmt.Sprintf("1. test: *%s* failed **%d** times.  (passed %d times)  \n",
 				test.Key, test.Value, passed)
 		}
 	} else {
@@ -120,7 +123,7 @@ func (h *KVHeap) Pop() interface{} {
 // and passedTestMap for each test that passed.
 func collectStats(ctx context.Context, ucs bool,
 	failedTestMap, passedTestMap map[string]int,
-	logger logr.Logger) int {
+	logger logr.Logger) (int, int) {
 	// On average we have 3 runs per day. Setting limit to 30. Any run older than a week
 	// will be discarded.
 	const numberOfRuns int = 30
@@ -134,10 +137,11 @@ func collectStats(ctx context.Context, ucs bool,
 	b, err := es_utils.GetAvailableRuns(ctx, env, numberOfRuns, logger)
 	if err != nil {
 		logger.Info(fmt.Sprintf("Failed to get available UCS runs. Err: %v", err))
-		return 0
+		return 0, 0
 	}
 
 	runs := 0
+	failedRuns := 0
 
 	// For each available run, get all results
 	for _, bucket := range b.Buckets {
@@ -158,20 +162,25 @@ func collectStats(ctx context.Context, ucs bool,
 		}
 
 		if shouldConsiderRun(results) {
+			foundFailed := false
 			runs++
 			var rtyp es_utils.Result
 			for _, item := range results.Each(reflect.TypeOf(rtyp)) {
 				r := item.(es_utils.Result)
 				if r.Result == "failed" {
 					failedTestMap[r.Name]++
+					foundFailed = true
 				} else if r.Result == "passed" {
 					passedTestMap[r.Name]++
 				}
 			}
+			if foundFailed {
+				failedRuns++
+			}
 		}
 	}
 
-	return runs
+	return runs, failedRuns
 }
 
 // shouldConsiderRun returns true if results were collected in the
