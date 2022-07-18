@@ -36,7 +36,7 @@ const cpuRsdThreshold float64 = 40
 func CheckReportUsageOnUCS(ctx context.Context,
 	webexClient *webexteams.Client, roomID string,
 	logger logr.Logger) {
-	_ = gocron.Every(1).Monday().At("11:00:00").Do(evaluateUCSUsageReports,
+	_ = gocron.Every(1).Tuesday().At("11:00:00").Do(evaluateUCSUsageReports,
 		ctx, webexClient, roomID, logger)
 }
 
@@ -61,7 +61,8 @@ func evaluateUCSUsageReports(ctx context.Context,
 	if len(reportFiles) > 0 {
 		textMessage := "Hello I detected something which I believe needs to be looked at.  \n"
 		textMessage += "For the reports in the plot the relative standard deviation is too big.  \n"
-		sendAlertForReport(webexClient, roomID, textMessage, reportFiles, logger)
+		logger.Info(textMessage)
+		//sendAlertForReport(webexClient, roomID, textMessage, reportFiles, logger)
 	}
 
 	// Analyze per pod memory usage compared to memory limit.

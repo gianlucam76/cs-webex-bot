@@ -96,6 +96,9 @@ func main() {
 	// Generate pie charts for UCS and VCS considering test durations
 	analyze.CreatePieCharts(ctx, webexClient, room.ID, logger)
 
+	// Send reports on memory/cpu usage
+	analyze.CheckReportUsageOnUCS(ctx, webexClient, room.ID, logger)
+
 	// TODO: re-enable this
 	// learning.AnalyzeOpenIssues(ctx, webexClient, room.ID, jiraClient, logger)
 
