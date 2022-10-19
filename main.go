@@ -32,7 +32,7 @@ import (
 )
 
 const (
-	defaultPollInterval = 20 * time.Second
+	defaultPollInterval = 30 * time.Second
 	webexRoom           = "E2E_WEBEX_ROOM"
 	issueText           = "issues"
 	vcsText             = "vcs"
